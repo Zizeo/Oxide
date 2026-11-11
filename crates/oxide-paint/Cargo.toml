@@ -1,0 +1,15 @@
+[package]
+name = "oxide-paint"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+oxide-dom = { path = "../oxide-dom" }
+oxide-layout = { path = "../oxide-layout" }
+vello = { workspace = true }
+cosmic-text = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+oxide-style = { path = "../oxide-style" }
