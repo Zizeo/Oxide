@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/oxide-browser",
+    "crates/oxide-net",
+    "crates/oxide-dom",
+    "crates/oxide-style",
+    "crates/oxide-layout",
+    "crates/oxide-paint",
+    "crates/oxide-js",
+]
+default-members = ["crates/oxide-browser"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+url = "2"
+winit = "0.30"
+wgpu = "24"
+egui = "0.31"
+egui-winit = "0.31"
+egui-wgpu = "0.31"
+vello = "0.4"
+html5ever = "0.27"
+markup5ever_rcdom = "0.3"
+slotmap = "1.0"
+taffy = "0.7"
+cosmic-text = "0.13"
+cssparser = "0.34"
+selectors = "0.25"
+boa_engine = "0.20"
+boa_gc = "0.20"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+bytemuck = "1.21"
+pollster = "0.4"
+wry = "0.50"
+png = "0.17"
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Storage_Xps"] }
