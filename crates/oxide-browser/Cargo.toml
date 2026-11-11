@@ -1,0 +1,35 @@
+[package]
+name = "oxide-browser"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "oxide-browser"
+path = "src/main.rs"
+
+[dependencies]
+oxide-net = { path = "../oxide-net" }
+oxide-dom = { path = "../oxide-dom" }
+oxide-style = { path = "../oxide-style" }
+oxide-layout = { path = "../oxide-layout" }
+oxide-paint = { path = "../oxide-paint" }
+oxide-js = { path = "../oxide-js" }
+
+tokio = { workspace = true }
+winit = { workspace = true }
+wgpu = { workspace = true }
+egui = { workspace = true }
+egui-winit = { workspace = true }
+egui-wgpu = { workspace = true }
+url = { workspace = true }
+pollster = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+bytemuck = { workspace = true }
+wry = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+png = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
