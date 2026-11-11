@@ -1,0 +1,11 @@
+[package]
+name = "oxide-js"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+oxide-dom = { path = "../oxide-dom" }
+boa_engine = { workspace = true }
+boa_gc = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
