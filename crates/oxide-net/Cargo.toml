@@ -1,0 +1,13 @@
+[package]
+name = "oxide-net"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+percent-encoding = "2"
+
