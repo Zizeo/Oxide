@@ -1,0 +1,12 @@
+[package]
+name = "oxide-layout"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+oxide-dom = { path = "../oxide-dom" }
+oxide-style = { path = "../oxide-style" }
+taffy = { workspace = true }
+cosmic-text = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
