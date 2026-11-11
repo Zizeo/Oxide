@@ -1,0 +1,10 @@
+[package]
+name = "oxide-style"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cssparser = { workspace = true }
+selectors = { workspace = true }
+oxide-dom = { path = "../oxide-dom" }
+tracing = { workspace = true }
