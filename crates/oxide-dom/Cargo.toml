@@ -1,0 +1,11 @@
+[package]
+name = "oxide-dom"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+html5ever = { workspace = true }
+markup5ever_rcdom = { workspace = true }
+slotmap = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
