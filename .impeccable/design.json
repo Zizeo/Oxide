@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-18T00:16:30+01:00",
+  "title": "Design System: Oxide Browser",
+  "extensions": {
+    "colorMeta": {
+      "primary": { "role": "primary", "displayName": "Cobalt Focus", "canonical": "#3b82f6", "tonalRamp": ["#172554", "#1e3a8a", "#1d4ed8", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#dbeafe"] },
+      "primary-bright": { "role": "primary", "displayName": "Sky Signal", "canonical": "#60a5fa", "tonalRamp": ["#172554", "#1e3a8a", "#1d4ed8", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#eff6ff"] },
+      "chrome-canvas": { "role": "neutral", "displayName": "Obsidian Canvas", "canonical": "#111216", "tonalRamp": ["#0b0c0f", "#111216", "#181a20", "#20232a", "#2e323e", "#484f62", "#9ca3af", "#d4d8e2"] },
+      "chrome-strip": { "role": "neutral", "displayName": "Charcoal Strip", "canonical": "#1a1b1e", "tonalRamp": ["#0b0c0f", "#14161b", "#1a1b1e", "#22252e", "#2e323e", "#484f62", "#9ca3af", "#d4d8e2"] },
+      "chrome-elevated": { "role": "neutral", "displayName": "Slate Elevated", "canonical": "#20232a", "tonalRamp": ["#111216", "#181a21", "#20232a", "#2a2e3a", "#383e4c", "#585e6c", "#9ca3af", "#d4d8e2"] },
+      "surface-popover": { "role": "neutral", "displayName": "Graphite Popover", "canonical": "#1a1c23", "tonalRamp": ["#111216", "#1a1c23", "#22252e", "#2e323e", "#383e4c", "#585e6c", "#9ca3af", "#e5e7eb"] },
+      "surface-well": { "role": "neutral", "displayName": "Midnight Well", "canonical": "#14161b", "tonalRamp": ["#0d0e12", "#14161b", "#1a1c23", "#22252e", "#2e3340", "#484f62", "#9ca3af", "#d4d8e2"] },
+      "hairline-border": { "role": "neutral", "displayName": "Steel Hairline", "canonical": "#2e3340", "tonalRamp": ["#1a1c23", "#22252e", "#2e3340", "#3b4252", "#484f62", "#6b7280", "#9ca3af", "#d4d8e2"] },
+      "status-secure": { "role": "semantic", "displayName": "Emerald Secure", "canonical": "#4ade80", "tonalRamp": ["#052e16", "#14532d", "#15803d", "#16a34a", "#22c55e", "#4ade80", "#86efac", "#dcfce7"] },
+      "status-warning": { "role": "semantic", "displayName": "Amber Caution", "canonical": "#fbbf24", "tonalRamp": ["#451a03", "#78350f", "#b45309", "#d97706", "#f59e0b", "#fbbf24", "#fcd34d", "#fef3c7"] },
+      "status-danger": { "role": "semantic", "displayName": "Crimson Blocked", "canonical": "#f87171", "tonalRamp": ["#450a0a", "#7f1d1d", "#b91c1c", "#dc2626", "#ef4444", "#f87171", "#fca5a5", "#fee2e2"] }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Headline", "purpose": "Internal oxide:// page titles." },
+      "title": { "displayName": "Title", "purpose": "Settings and management section headers." },
+      "body": { "displayName": "Body", "purpose": "Tab labels, menus, and list rows." },
+      "label": { "displayName": "Label", "purpose": "Security identity pills, zoom badge, and status tags." },
+      "mono": { "displayName": "Monospace", "purpose": "Omnibox URLs and DevTools timing telemetry." }
+    },
+    "shadows": [],
+    "breakpoints": [
+      { "name": "min-window", "value": "640px" },
+      { "name": "content-max", "value": "860px" },
+      { "name": "default-window", "value": "1280px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Nav Icon Button",
+      "kind": "button",
+      "refersTo": "button-nav-icon",
+      "description": "Circular 28px navigation button for Back, Forward, Reload, Home, and App Menu.",
+      "html": "<button class=\"ds-nav-icon\" aria-label=\"Reload\">⟳</button>",
+      "css": ".ds-nav-icon { width: 28px; height: 28px; border-radius: 14px; border: none; background: transparent; color: #d4d8e2; font-size: 13.5px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; } .ds-nav-icon:hover { background: #2e323e; } .ds-nav-icon:focus-visible { outline: 1px solid #3b82f6; }"
+    },
+    {
+      "name": "Chrome Pill Button",
+      "kind": "button",
+      "refersTo": "button-chrome-pill",
+      "description": "Compact pill button used for DevTools toggle and Downloads indicator.",
+      "html": "<button class=\"ds-chrome-pill\">DevTools</button>",
+      "css": ".ds-chrome-pill { height: 28px; padding: 4px 10px; border-radius: 14px; border: 1px solid transparent; background: #22252e; color: #9ca3af; font-size: 11.5px; cursor: pointer; } .ds-chrome-pill:hover { background: #2e323e; color: #d4d8e2; border-color: #484f62; } .ds-chrome-pill:focus-visible { outline: 1px solid #3b82f6; }"
+    },
+    {
+      "name": "Omnibox Pill",
+      "kind": "input",
+      "refersTo": "input-omnibox",
+      "description": "Centered URL bar pill pairing a clickable Site Identity Pill with a fluid monospace input.",
+      "html": "<div class=\"ds-omnibox\"><span class=\"ds-site-pill\">HTTPS</span><input class=\"ds-omnibox-input\" value=\"https://example.com\" /></div>",
+      "css": ".ds-omnibox { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 8px; border-radius: 16px; background: #14161b; border: 1px solid #343946; } .ds-omnibox:focus-within { border-color: #3b82f6; } .ds-site-pill { padding: 2px 8px; border-radius: 10px; background: #1e2129; color: #4ade80; font-size: 11px; font-weight: 600; } .ds-omnibox-input { flex: 1; background: transparent; border: none; outline: none; color: #d4d8e2; font-family: Consolas, ui-monospace, monospace; font-size: 12.5px; }"
+    },
+    {
+      "name": "Bookmark Chip",
+      "kind": "chip",
+      "refersTo": "chip-bookmark",
+      "description": "Low-profile 20px bookmark shortcut chip in the bookmarks bar.",
+      "html": "<button class=\"ds-bookmark-chip\">Rust Lang</button>",
+      "css": ".ds-bookmark-chip { height: 20px; padding: 0 8px; border-radius: 6px; border: none; background: #202226; color: #b4b9c3; font-size: 11.5px; cursor: pointer; } .ds-bookmark-chip:hover { background: #2d2f36; color: #ffffff; } .ds-bookmark-chip:focus-visible { outline: 1px solid #3b82f6; }"
+    },
+    {
+      "name": "Popover Surface",
+      "kind": "card",
+      "refersTo": "popover-surface",
+      "description": "Floating menu, autocomplete, and Find bar surface using tonal elevation and a 1px hairline border.",
+      "html": "<div class=\"ds-popover\"><div class=\"ds-popover-item\">New tab</div><div class=\"ds-popover-item\">Settings</div></div>",
+      "css": ".ds-popover { background: #1a1c23; border: 1px solid #2e3340; border-radius: 8px; padding: 6px; color: #d4d8e2; font-size: 12.5px; } .ds-popover-item { padding: 5px 8px; border-radius: 6px; } .ds-popover-item:hover { background: #2e323e; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Precision Cockpit",
+    "overview": "Oxide Browser is an operational desktop shell whose chrome behaves like a low-glare cockpit instrument panel: dense, quiet, and visually subordinate to the rendered web page. Every surface steps cleanly in dark slate luminance rather than competing with page content through heavy drop shadows or saturated decoration.\n\nControls are crisp and restrained—compact pills, circular 28px icon targets, monochrome vector/geometric glyphs, and 1px hairline borders—while saturated color is held in reserve strictly for active focus rings, security indicators, and Private/Incognito session identity.",
+    "keyCharacteristics": [
+      "Low-glare dark-slate surface stepping (`chrome-canvas` -> `chrome-strip` -> `chrome-elevated`)",
+      "Zero-clipping `right_to_left` layout discipline across every toolbar and management row",
+      "Crisp 1px structural hairlines instead of heavy ambient shadows",
+      "Accent blue reserved exclusively for active focus, selection, and DevTools state"
+    ],
+    "rules": [
+      { "name": "The Reserved Accent Rule", "body": "Cobalt Focus and Sky Signal appear only on active focus rings, selected states, and internal status badges—never as decorative fills on resting chrome.", "section": "colors" },
+      { "name": "The Telemetry-Only Monospace Rule", "body": "Monospace is used exclusively for URLs, code, and timing readouts—never as decorative styling on UI headings or buttons.", "section": "typography" },
+      { "name": "The Right-First Chrome Rule", "body": "In any horizontal bar or list row mixing variable-width text with fixed action buttons, lay out right-side actions right_to_left first so buttons never clip off-screen.", "section": "layout" },
+      { "name": "The Tonal Separation Rule", "body": "Separate adjacent chrome bands and floating popovers by surface luminance step plus a 1px hairline stroke—never with heavy blur or offset shadows.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do lay out right-edge chrome controls and row action buttons `right_to_left` before fluid text inputs or URL labels.",
+      "Do keep navigation chrome monochrome with crisp geometric glyphs (`◀`, `▶`, `⟳`, `⌂`, `⋮`, `▲`, `▼`, `✕`), reserving color for focus rings and security states.",
+      "Do use `horizontal_wrapped` or `ScrollArea::horizontal()` on multi-item toolbars (DevTools tabs, Settings radio groups) so narrow `640px` windows stay clip-free."
+    ],
+    "donts": [
+      "Don't subtract hardcoded pixel widths (`ui.available_width() - 220.0`) to size the Omnibox or Find bar.",
+      "Don't render emoji icons inside operational chrome buttons or DevTools tabs.",
+      "Don't render untrimmed long URLs in horizontal rows without `.truncate()`."
+    ]
+  }
+}
