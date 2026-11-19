@@ -29,6 +29,7 @@ pub fn handle_shortcuts(ctx: &egui::Context, state: &mut BrowserState) -> bool {
 
     let cmd = Modifiers::COMMAND;
     let cmd_shift = Modifiers::COMMAND.plus(Modifiers::SHIFT);
+    let esc_target = escape_target(state);
 
     let mut actions: Vec<TabAction> = Vec::new();
 
@@ -38,10 +39,8 @@ pub fn handle_shortcuts(ctx: &egui::Context, state: &mut BrowserState) -> bool {
             actions.push(TabAction::ReopenClosed);
         }
         if input.consume_key(cmd_shift, Key::R) {
-            // The engine has no cache-busting reload, so a hard reload is a
-            // normal reload rather than a silently dead shortcut.
             if let Some(id) = active {
-                actions.push(TabAction::Reload(id));
+                actions.push(TabAction::HardReload(id));
             }
         }
         if input.consume_key(cmd_shift, Key::A) {
@@ -84,6 +83,18 @@ pub fn handle_shortcuts(ctx: &egui::Context, state: &mut BrowserState) -> bool {
             // Chrome's "Bookmark all tabs". Consumed before the plain Ctrl+D
             // below, which would otherwise also fire.
             actions.push(TabAction::BookmarkAll);
+        }
+        if input.consume_key(cmd_shift, Key::N) {
+            actions.push(TabAction::NewIncognitoWindow);
+        }
+        if input.consume_key(cmd_shift, Key::O) {
+            actions.push(TabAction::OpenInNewTab("oxide://bookmarks".to_string()));
+        }
+        if input.consume_key(cmd_shift, Key::Delete) {
+            actions.push(TabAction::OpenClearDataModal);
+        }
+        if input.consume_key(cmd_shift, Key::B) {
+            actions.push(TabAction::ToggleBookmarksBar);
         }
 
         // ---- plain combinations ----------------------------------------
@@ -143,11 +154,69 @@ pub fn handle_shortcuts(ctx: &egui::Context, state: &mut BrowserState) -> bool {
         if input.consume_key(cmd, Key::Num9) {
             actions.push(TabAction::ActivateLast);
         }
+        if input.consume_key(cmd, Key::F) {
+            actions.push(TabAction::OpenFindBar);
+        }
+        if input.consume_key(cmd, Key::N) {
+            actions.push(TabAction::NewWindow);
+        }
+        if input.consume_key(cmd, Key::P) {
+            actions.push(TabAction::Print);
+        }
+        if input.consume_key(cmd, Key::H) {
+            actions.push(TabAction::OpenInNewTab("oxide://history".to_string()));
+        }
+        if input.consume_key(cmd, Key::J) {
+            actions.push(TabAction::OpenInNewTab("oxide://downloads".to_string()));
+        }
+        if input.consume_key(cmd, Key::Plus) || input.consume_key(cmd, Key::Equals) {
+            actions.push(TabAction::ZoomIn);
+        }
+        if input.consume_key(cmd, Key::Minus) {
+            actions.push(TabAction::ZoomOut);
+        }
+        if input.consume_key(cmd, Key::Num0) {
+            actions.push(TabAction::ZoomReset);
+        }
+        if input.consume_key(Modifiers::NONE, Key::F11) {
+            actions.push(TabAction::ToggleFullscreen);
+        }
+        if input.consume_key(Modifiers::NONE, Key::F12) {
+            actions.push(TabAction::ToggleDevtools);
+        }
+        if input.consume_key(Modifiers::SHIFT, Key::Escape) {
+            actions.push(TabAction::ToggleTaskManager);
+        }
+        if let Some(target) = esc_target
+            && input.consume_key(Modifiers::NONE, Key::Escape)
+        {
+            actions.push(target);
+        }
     });
 
     let handled = !actions.is_empty();
     apply_all(state, actions);
     handled
+}
+
+/// Picks the topmost modal/bar that `Escape` in global shortcuts should close.
+///
+/// Inline overlays (`tab_search_open`, `group_rename`, `omnibox_focused`)
+/// handle their own `Escape` locally, so returning `None` prevents `FindBar`
+/// from stealing the keystroke from them.
+fn escape_target(state: &BrowserState) -> Option<TabAction> {
+    if state.tab_search_open || state.group_rename.is_some() || state.omnibox_focused {
+        return None;
+    }
+    if state.clear_data_modal_open {
+        Some(TabAction::CloseClearDataModal)
+    } else if state.task_manager_open {
+        Some(TabAction::CloseTaskManager)
+    } else if state.find_bar_open {
+        Some(TabAction::CloseFindBar)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -166,5 +235,33 @@ mod tests {
         for (shift, plain) in pairs {
             assert_ne!(shift, plain);
         }
+    }
+
+    #[test]
+    fn escape_respects_overlay_priority_and_yields_to_inline_inputs() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut s = super::BrowserState::new(rt.handle().clone());
+
+        s.find_bar_open = true;
+        assert_eq!(super::escape_target(&s), Some(TabAction::CloseFindBar));
+
+        s.task_manager_open = true;
+        assert_eq!(super::escape_target(&s), Some(TabAction::CloseTaskManager));
+
+        s.clear_data_modal_open = true;
+        assert_eq!(
+            super::escape_target(&s),
+            Some(TabAction::CloseClearDataModal)
+        );
+
+        s.tab_search_open = true;
+        assert_eq!(super::escape_target(&s), None);
+
+        s.tab_search_open = false;
+        s.omnibox_focused = true;
+        assert_eq!(super::escape_target(&s), None);
     }
 }

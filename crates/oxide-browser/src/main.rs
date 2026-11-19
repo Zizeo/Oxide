@@ -4,8 +4,10 @@
 
 mod app;
 mod browser;
+mod extensions;
 mod favicon;
 mod menu_window;
+mod renderer_ipc;
 mod session;
 mod snapshot;
 mod tab;
@@ -17,6 +19,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|a| a == "--renderer") {
+        renderer_ipc::run_renderer_process();
+        return Ok(());
+    }
     // Initialize structured logging
     tracing_subscriber::registry()
         .with(

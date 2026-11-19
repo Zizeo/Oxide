@@ -204,14 +204,7 @@ impl MenuWindow {
             if used.width() >= 1.0 && used.height() >= 1.0 {
                 let (offset, content) = layout(used, self.area_offset);
                 self.area_offset = offset;
-                self.anchor.x = self.anchor.x.clamp(
-                    self.work_area.left(),
-                    (self.work_area.right() - content.width()).max(self.work_area.left()),
-                );
-                self.anchor.y = self.anchor.y.clamp(
-                    self.work_area.top(),
-                    (self.work_area.bottom() - content.height()).max(self.work_area.top()),
-                );
+                self.anchor = clamp_anchor(self.anchor, content.size(), self.work_area);
                 self.measured = true;
             }
         }
@@ -220,21 +213,23 @@ impl MenuWindow {
         textures_delta.append(output.textures_delta);
 
         let used = painted_rect(&self.egui_ctx);
+        let mut bounds_changed = false;
         if used.width() >= 1.0 && used.height() >= 1.0 {
             let (offset, content) = layout(used, self.area_offset);
             self.area_offset = offset;
             let target = Rect::from_min_size(self.anchor + content.min.to_vec2(), content.size());
-            self.fit(target);
+            bounds_changed = self.fit(target);
         }
 
         // `visible_layer_ids` still reports the previous frame's areas, so a
         // submenu that just closed keeps the window large for a frame or two.
-        // Keep repainting until only the base menu is left, otherwise a dark
-        // rectangle is left over the page.
-        if let Some(base) = self
-            .egui_ctx
-            .memory(|m| m.area_rect(egui::Id::new(MENU_AREA_ID)))
-            && used != base
+        // Similarly, a newly fitted window bounds needs an extra pass with the
+        // updated `area_offset` and swapchain size.
+        if bounds_changed
+            || self
+                .egui_ctx
+                .memory(|m| m.area_rect(egui::Id::new(MENU_AREA_ID)))
+                .is_some_and(|base| used != base)
         {
             self.window.request_redraw();
         }
@@ -292,6 +287,13 @@ impl MenuWindow {
                     MenuEvent::Continue
                 }
             }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                self.work_area = work_area_of(&self.window);
+                self.applied_px = None;
+                self.measured = false;
+                self.window.request_redraw();
+                MenuEvent::Continue
+            }
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == ElementState::Pressed
                     && event.logical_key == Key::Named(NamedKey::Escape) =>
@@ -316,9 +318,10 @@ impl MenuWindow {
 
     /// Moves and resizes the window to `target` (logical screen points).
     ///
+    /// Returns `true` when the physical window bounds changed.
     /// Does not show the window: the caller paints first, so the first
     /// visible frame is the menu rather than an empty surface.
-    fn fit(&mut self, target: Rect) {
+    fn fit(&mut self, target: Rect) -> bool {
         let scale = self.window.scale_factor() as f32;
         let x = (target.min.x * scale).round() as i32;
         let y = (target.min.y * scale).round() as i32;
@@ -326,7 +329,8 @@ impl MenuWindow {
         let height = (target.height().max(1.0) * scale).round().max(1.0) as u32;
         let bounds = (x, y, width, height);
 
-        if self.applied_px != Some(bounds) {
+        let changed = self.applied_px != Some(bounds);
+        if changed {
             #[cfg(windows)]
             win32_set_bounds(&self.window, x, y, width, height);
             #[cfg(not(windows))]
@@ -348,6 +352,7 @@ impl MenuWindow {
         {
             self.wgpu.resize(want_size);
         }
+        changed
     }
 
     /// Shows the window once it has been painted at the right size.
@@ -442,6 +447,20 @@ fn painted_rect(ctx: &egui::Context) -> Rect {
 fn layout(used: Rect, area_offset: Vec2) -> (Vec2, Rect) {
     let content = used.translate(-area_offset);
     (-content.min.to_vec2(), content)
+}
+
+/// Keeps a popup menu's top-left corner inside the monitor's usable work area.
+fn clamp_anchor(anchor: Pos2, size: Vec2, work_area: Rect) -> Pos2 {
+    Pos2::new(
+        anchor.x.clamp(
+            work_area.left(),
+            (work_area.right() - size.x).max(work_area.left()),
+        ),
+        anchor.y.clamp(
+            work_area.top(),
+            (work_area.bottom() - size.y).max(work_area.top()),
+        ),
+    )
 }
 
 /// The monitor's usable area (excluding the taskbar), in logical points.
@@ -596,5 +615,18 @@ mod tests {
         let (offset2, content2) = layout(used, offset);
         assert_eq!(offset2, offset, "the offset must not drift");
         assert_eq!(content2, content, "the window rect must not drift");
+    }
+
+    #[test]
+    fn clamp_anchor_keeps_menu_inside_secondary_monitor_work_area() {
+        // Multi-monitor negative/offset work area (e.g. left or bottom-right monitor).
+        let work = Rect::from_min_max(Pos2::new(-1920.0, 0.0), Pos2::new(0.0, 1040.0));
+        let size = Vec2::new(240.0, 320.0);
+
+        let bottom_right = clamp_anchor(Pos2::new(-50.0, 900.0), size, work);
+        assert_eq!(bottom_right, Pos2::new(-240.0, 720.0));
+
+        let top_left = clamp_anchor(Pos2::new(-2000.0, -20.0), size, work);
+        assert_eq!(top_left, Pos2::new(-1920.0, 0.0));
     }
 }

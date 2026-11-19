@@ -75,7 +75,11 @@ fn window_attributes() -> WindowAttributes {
 /// never received focus would otherwise leave a menu stuck on screen.
 fn dismisses_menu(event: &WindowEvent) -> bool {
     match event {
-        WindowEvent::Focused(true) => true,
+        WindowEvent::Focused(true)
+        | WindowEvent::Moved(_)
+        | WindowEvent::Resized(_)
+        | WindowEvent::Occluded(true)
+        | WindowEvent::MouseWheel { .. } => true,
         WindowEvent::MouseInput {
             state: ElementState::Pressed,
             ..
@@ -207,6 +211,7 @@ impl BrowserApp {
             // Poll any WebView and background network responses
             state.poll_webview_events();
             state.poll_network_events();
+            state.poll_download_events();
             state.poll_favicons();
             // New sites are picked up here, so an icon that arrives after
             // first paint is still cached for the next frame.
@@ -223,6 +228,16 @@ impl BrowserApp {
             // own window; the page is left alone, so it stays live.
             if let Some(pending) = state.pending_menu.take() {
                 open_menu(menu, state, wgpu, event_loop, pending);
+            }
+
+            if state.pending_fullscreen_toggle {
+                state.pending_fullscreen_toggle = false;
+                let next = if wgpu.window.fullscreen().is_some() {
+                    None
+                } else {
+                    Some(winit::window::Fullscreen::Borderless(None))
+                };
+                wgpu.window.set_fullscreen(next);
             }
 
             // A drag released outside the strip asks for a window, which only
@@ -256,9 +271,40 @@ impl BrowserApp {
                 wgpu.window.request_redraw();
             }
 
-            state.pending_detach.take()
+            (
+                state.pending_detach.take(),
+                std::mem::take(&mut state.pending_new_window),
+                std::mem::take(&mut state.pending_new_incognito_window),
+                state.pending_open_url_in_new_window.take(),
+                std::mem::take(&mut state.pending_exit),
+            )
         };
 
+        let (detach, new_win, new_incognito_win, open_url_win, exit_app) = detach;
+        if exit_app {
+            event_loop.exit();
+            return;
+        }
+        if new_win {
+            self.create_window(event_loop, window_attributes(), true);
+        }
+        if new_incognito_win
+            && let Some(target) = self.create_window(
+                event_loop,
+                window_attributes().with_title("Oxide Browser (Incognito)"),
+                false,
+            )
+        {
+            self.windows[target].state =
+                BrowserState::new_incognito(self.tokio_runtime.handle().clone());
+            self.windows[target].wgpu.window.request_redraw();
+        }
+        if let Some(url) = open_url_win
+            && let Some(target) = self.create_window(event_loop, window_attributes(), false)
+        {
+            self.windows[target].state.create_tab(&url);
+            self.windows[target].wgpu.window.request_redraw();
+        }
         if let Some(pending) = detach {
             self.detach_tabs(event_loop, index, pending);
         }
@@ -398,9 +444,13 @@ impl ApplicationHandler for BrowserApp {
             return;
         };
 
-        // Anything the user does in a browser window dismisses its menu.
-        if self.windows[index].menu.is_some() && dismisses_menu(&event) {
-            self.close_menu(index, false);
+        // Anything the user does in a browser window dismisses open menus.
+        if dismisses_menu(&event) {
+            for i in 0..self.windows.len() {
+                if self.windows[i].menu.is_some() {
+                    self.close_menu(i, false);
+                }
+            }
         }
 
         let repaint = {
@@ -449,5 +499,23 @@ impl ApplicationHandler for BrowserApp {
                 wgpu_ctx.window.request_redraw();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dismisses_menu_on_move_resize_scroll_and_focus() {
+        assert!(dismisses_menu(&WindowEvent::Moved(
+            winit::dpi::PhysicalPosition::new(10, 20)
+        )));
+        assert!(dismisses_menu(&WindowEvent::Resized(PhysicalSize::new(
+            800, 600
+        ))));
+        assert!(dismisses_menu(&WindowEvent::Occluded(true)));
+        assert!(dismisses_menu(&WindowEvent::Focused(true)));
+        assert!(!dismisses_menu(&WindowEvent::Focused(false)));
     }
 }

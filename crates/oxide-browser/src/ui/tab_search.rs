@@ -22,8 +22,8 @@ use egui::{Color32, Context, CornerRadius, Id, Key, Margin, RichText, Stroke, Ve
 /// Muted text colour used for secondary information.
 const DIM: Color32 = Color32::from_rgb(140, 145, 155);
 
-/// Height of the chrome above the page: the overlay opens just below it.
-const OVERLAY_TOP: f32 = 104.0;
+/// Fallback top offset before the first viewport pass records `viewport_rect`.
+const FALLBACK_OVERLAY_TOP: f32 = 84.0;
 
 /// Shortens a title so a single row cannot stretch the overlay.
 fn short_title(title: &str) -> String {
@@ -54,9 +54,15 @@ pub fn render(ctx: &Context, state: &mut BrowserState) {
 
     let screen = ctx.screen_rect();
     let width = 460.0_f32.min((screen.width() - 32.0).max(240.0));
+    let top_y = if state.viewport_rect.height() > 1.0 {
+        state.viewport_rect.top() + 8.0
+    } else {
+        screen.top() + FALLBACK_OVERLAY_TOP
+    };
+    let max_list_height = (screen.bottom() - top_y - 120.0).clamp(100.0, 320.0);
     let pos = egui::pos2(
         (screen.center().x - width * 0.5).max(screen.left() + 8.0),
-        screen.top() + OVERLAY_TOP,
+        top_y.clamp(screen.top() + 8.0, (screen.bottom() - 180.0).max(screen.top() + 8.0)),
     );
 
     egui::Area::new(Id::new("oxide_tab_search"))
@@ -65,9 +71,9 @@ pub fn render(ctx: &Context, state: &mut BrowserState) {
         .movable(false)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style())
-                .fill(Color32::from_rgb(28, 30, 35))
-                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(70, 74, 84)))
-                .corner_radius(CornerRadius::same(10))
+                .fill(Color32::from_rgb(26, 28, 35))
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(46, 51, 64)))
+                .corner_radius(CornerRadius::same(8))
                 .inner_margin(Margin::same(10))
                 .show(ui, |ui| {
                     ui.set_width(width - 20.0);
@@ -140,7 +146,7 @@ pub fn render(ctx: &Context, state: &mut BrowserState) {
                         );
                     } else {
                         egui::ScrollArea::vertical()
-                            .max_height(320.0)
+                            .max_height(max_list_height)
                             .show(ui, |ui| {
                                 for (index, id) in matches.iter().enumerate() {
                                     let Some(tab) = state.tab(*id) else {
@@ -148,7 +154,7 @@ pub fn render(ctx: &Context, state: &mut BrowserState) {
                                     };
                                     let mut label = String::new();
                                     if tab.pinned {
-                                        label.push_str("📌 ");
+                                        label.push_str("[Pin] ");
                                     }
                                     if tab.loading {
                                         label.push_str("⟳ ");
@@ -157,7 +163,7 @@ pub fn render(ctx: &Context, state: &mut BrowserState) {
                                         label.push_str("◌ ");
                                     }
                                     if tab.muted {
-                                        label.push_str("🔇 ");
+                                        label.push_str("[Muted] ");
                                     } else if tab.audio_playing {
                                         label.push_str("🔊 ");
                                     }

@@ -89,16 +89,16 @@ const CLOSE_ALWAYS_WIDTH: f32 = 88.0;
 const AUDIO_ICON_WIDTH: f32 = 13.0;
 
 /// Multi-selection accent, also used for the drag insertion marker.
-const ACCENT: Color32 = Color32::from_rgb(90, 150, 240);
+const ACCENT: Color32 = Color32::from_rgb(102, 157, 246);
 
-/// Default (inactive) tab background.
-const INACTIVE_BG: Color32 = Color32::from_rgb(26, 27, 30);
+/// Default (inactive) tab background: transparent on the `#1f2024` strip.
+const INACTIVE_BG: Color32 = Color32::TRANSPARENT;
 
 /// Slightly lifted background for the hovered tab.
-const HOVER_BG: Color32 = Color32::from_rgb(34, 36, 41);
+const HOVER_BG: Color32 = Color32::from_rgb(42, 44, 50);
 
-/// The displayed tab is brighter than its neighbours and keeps a white title.
-const ACTIVE_BG: Color32 = Color32::from_rgb(45, 47, 54);
+/// Active tab shares the exact toolbar fill (`#2b2d31`) so it merges seamlessly.
+const ACTIVE_BG: Color32 = Color32::from_rgb(43, 45, 49);
 
 /// Selected-but-not-active tabs get their own fill plus the accent border.
 const SELECTED_BG: Color32 = Color32::from_rgb(52, 56, 64);
@@ -450,6 +450,25 @@ fn is_noop_move(state: &BrowserState, ids: &[u64], to_index: usize) -> bool {
     contiguous && (to_index == first || to_index == first + positions.len())
 }
 
+/// Horizontal span of the drop band covers the whole tab-bar row so dragging
+/// into empty space right of the tabs reorders to the end instead of detaching.
+fn is_in_drop_band(strip: Rect, row: Rect, pointer: Pos2) -> bool {
+    let band_left = strip.left().min(row.left());
+    let band_right = strip.right().max(row.right());
+    pointer.x >= band_left - EDGE_ZONE
+        && pointer.x <= band_right + EDGE_ZONE
+        && pointer.y >= strip.top() - TAB_HEIGHT
+        && pointer.y <= strip.bottom() + TAB_HEIGHT
+}
+
+/// Clickable empty strip area between "+" and the search button.
+fn leftover_strip_rect(add_rect: Rect, search_rect: Rect, row_rect: Rect) -> Rect {
+    Rect::from_min_max(
+        pos2(add_rect.right() + TAB_GAP, row_rect.top()),
+        pos2(search_rect.left() - TAB_GAP, row_rect.top() + TAB_HEIGHT),
+    )
+}
+
 /// Paints the 2px insertion marker, clamped to the visible strip so it never
 /// escapes the scroll viewport.
 fn paint_insertion_marker(ui: &Ui, slots: &[SlotInfo], plan_boundary: usize, strip: Rect) {
@@ -509,6 +528,8 @@ pub fn render_tab_bar(ui: &mut Ui, state: &mut BrowserState) {
 
     let drag_id = tab_drag_id();
     let drag_active = ui.ctx().data(|data| data.get_temp::<DragState>(drag_id)).is_some();
+    let rename_group_id = state.group_rename.as_ref().map(|r| r.group_id);
+    let mut row_bounds = Rect::NOTHING;
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(TAB_GAP, 0.0);
@@ -522,6 +543,7 @@ pub fn render_tab_bar(ui: &mut Ui, state: &mut BrowserState) {
         // `scroll_with_delta` has to be fed to the next scroll area, so both
         // the wheel translation and the drag auto-scroll must run first.
         let row_rect = ui.available_rect_before_wrap();
+        row_bounds = row_rect;
         let strip_rect = Rect::from_min_size(row_rect.min, vec2(strip_width, strip_height));
 
         if metrics.overflowing {
@@ -620,9 +642,11 @@ pub fn render_tab_bar(ui: &mut Ui, state: &mut BrowserState) {
                                             &mut actions,
                                         );
                                         // The inline rename editor opens just
-                                        // below the chip it belongs to.
-                                        rename_anchor =
-                                            Some(pos2(rect.left(), rect.bottom() + 4.0));
+                                        // below the specific chip being renamed.
+                                        if rename_group_id == Some(*group_id) {
+                                            rename_anchor =
+                                                Some(pos2(rect.left(), rect.bottom() + 4.0));
+                                        }
                                         slots.push(SlotInfo {
                                             plan_index,
                                             rect,
@@ -638,39 +662,42 @@ pub fn render_tab_bar(ui: &mut Ui, state: &mut BrowserState) {
 
         strip_screen_rect = strip.response.rect;
 
-        // Position the button right after the last slot. Because the strip
-        // is allocated at its natural width, this lands directly beside the
-        // last slot; when the strip overflows, `strip_width == usable_width`
-        // and the button ends up pinned to the right edge, staying reachable.
-        let add_rect = Rect::from_min_size(
+        // Tab search sits at the far right of the row, like Chrome's
+        // tab-search button, so it never scrolls out of reach with the tabs.
+        let search_rect = Rect::from_min_size(
             pos2(
-                strip.response.rect.left() + add_offset,
-                strip.response.rect.top(),
+                (row_rect.right() - SEARCH_BUTTON_WIDTH).max(row_rect.left()),
+                row_rect.top(),
             ),
+            Vec2::new(SEARCH_BUTTON_WIDTH, TAB_HEIGHT),
+        );
+
+        // Position the button right after the last slot, clamped left of the
+        // search button so narrow windows never overlap the two controls.
+        let add_x = (strip.response.rect.left() + add_offset)
+            .min((search_rect.left() - TAB_GAP - ADD_BUTTON_WIDTH).max(row_rect.left()));
+        let add_rect = Rect::from_min_size(
+            pos2(add_x, strip.response.rect.top()),
             Vec2::new(ADD_BUTTON_WIDTH, TAB_HEIGHT),
         );
 
-        let add_tab_btn = ui.put(
-            add_rect,
-            egui::Button::new(
-                RichText::new("+")
-                    .size(16.0)
-                    .color(Color32::from_rgb(200, 205, 215)),
+        let add_tab_btn = ui
+            .put(
+                add_rect,
+                egui::Button::new(
+                    RichText::new("+")
+                        .size(16.0)
+                        .color(Color32::from_rgb(200, 205, 215)),
+                )
+                .fill(Color32::from_rgb(38, 40, 46))
+                .corner_radius(CornerRadius::same(6)),
             )
-            .fill(Color32::from_rgb(38, 40, 46))
-            .corner_radius(CornerRadius::same(6)),
-        );
+            .on_hover_text("New tab (Ctrl+T)");
 
         if add_tab_btn.clicked() {
             actions.push(TabAction::NewTab);
         }
 
-        // Tab search sits at the far right of the row, like Chrome's
-        // tab-search button, so it never scrolls out of reach with the tabs.
-        let search_rect = Rect::from_min_size(
-            pos2(row_rect.right() - SEARCH_BUTTON_WIDTH, row_rect.top()),
-            Vec2::new(SEARCH_BUTTON_WIDTH, TAB_HEIGHT),
-        );
         let search_btn = ui
             .put(
                 search_rect,
@@ -683,23 +710,11 @@ pub fn render_tab_bar(ui: &mut Ui, state: &mut BrowserState) {
             state.open_tab_search();
         }
 
-        // The leftover part of the row (right of the "+") is the empty strip
-        // area: right clicking it offers the strip-wide actions.
-        // `ui.put` does not necessarily advance the layout cursor, so the
-        // strip-wide interact must never overlap the "+" button: registered
-        // later it would sit on top and swallow the click.
-        let leftover = {
-            let mut rect = ui.available_rect_before_wrap();
-            if rect.intersects(add_rect) {
-                rect.min.x = rect.min.x.max(add_rect.right() + TAB_GAP);
-            }
-            // The search button owns the right edge: the strip-wide interact
-            // must not cover it, or the click would land on the empty area.
-            if rect.intersects(search_rect) {
-                rect.max.x = rect.max.x.min(search_rect.left() - TAB_GAP);
-            }
-            rect
-        };
+        // The leftover part of the row (right of "+", left of search) is the
+        // empty strip area: compute it geometrically instead of reading
+        // `available_rect_before_wrap()`, which `ui.put(search_rect, ..)`
+        // advances past the right edge.
+        let leftover = leftover_strip_rect(add_rect, search_rect, row_rect);
         if leftover.width() > 1.0 && leftover.height() > 1.0 {
             let empty = ui.interact(
                 leftover,
@@ -721,16 +736,14 @@ pub fn render_tab_bar(ui: &mut Ui, state: &mut BrowserState) {
 
     // ---- drag & drop -----------------------------------------------------
     if let Some(drag) = ui.ctx().data(|data| data.get_temp::<DragState>(drag_id)) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         // `interact_pos` rather than `hover_pos`: a drag keeps its last known
         // position even after the pointer leaves the egui area, which is what
-        // a tear-off release needs.
+        // a tear-off release needs. Horizontally allow the whole tab-bar row
+        // (`row_bounds`) so dragging past the last tab into empty strip space
+        // reorders to the end instead of detaching a new window.
         let pointer = ui.ctx().input(|i| i.pointer.interact_pos());
-        let in_drop_band = pointer.is_some_and(|p| {
-            p.x >= strip_screen_rect.left() - EDGE_ZONE
-                && p.x <= strip_screen_rect.right() + EDGE_ZONE
-                && p.y >= strip_screen_rect.top() - TAB_HEIGHT
-                && p.y <= strip_screen_rect.bottom() + TAB_HEIGHT
-        });
+        let in_drop_band = pointer.is_some_and(|p| is_in_drop_band(strip_screen_rect, row_bounds, p));
 
         let target = match pointer {
             Some(pointer) if in_drop_band => {
@@ -898,6 +911,9 @@ fn draw_tab(
 
     let is_active = state.active_tab_id == Some(tab.id);
     let is_selected = state.is_selected(tab.id);
+    // Check geometric pointer containment so child widgets (`Label`, `close_btn`)
+    // never steal hover and flicker `HOVER_BG` or the narrow-tab close button.
+    let is_hovered = response.hovered() || ui.rect_contains_pointer(rect);
     // Silence can come from the tab's own flag or from a site-wide mute held
     // by the model, so the glyph and the tooltip both ask the model instead of
     // reading the tab field.
@@ -919,21 +935,30 @@ fn draw_tab(
             if is_selected {
                 Stroke::new(2.0_f32, ACCENT)
             } else {
-                Stroke::new(1.0_f32, Color32::from_rgb(60, 64, 72))
+                Stroke::NONE
             },
         )
     } else if is_selected {
         (SELECTED_BG, Stroke::new(2.0_f32, ACCENT))
-    } else if response.hovered() {
+    } else if is_hovered {
         (HOVER_BG, Stroke::NONE)
     } else {
         (INACTIVE_BG, Stroke::NONE)
     };
 
     let painter = ui.painter().clone();
-    painter.rect_filled(rect, rounding, bg);
+    if bg != Color32::TRANSPARENT {
+        painter.rect_filled(rect, rounding, bg);
+    }
     if stroke != Stroke::NONE {
         painter.rect_stroke(rect, rounding, stroke, StrokeKind::Inside);
+    } else if !is_active && !is_hovered {
+        // Subtle Chrome-style vertical separator between resting inactive tabs.
+        let x = rect.right() - 0.5;
+        painter.line_segment(
+            [pos2(x, rect.top() + 8.0), pos2(x, rect.bottom() - 8.0)],
+            Stroke::new(1.0_f32, Color32::from_rgb(52, 54, 62)),
+        );
     }
 
     // Fixed layout slots: [pad][icon][gap][title ...][close][pad].
@@ -984,6 +1009,7 @@ fn draw_tab(
         );
     }
 
+    let mut close_clicked = false;
     if !compact {
         let close_center = pos2(
             rect.right() - TAB_PADDING - CLOSE_BOX * 0.5,
@@ -993,7 +1019,7 @@ fn draw_tab(
 
         // Narrow tabs only reveal the close button on the tab the user is
         // actually looking at (active or hovered).
-        let show_close = width >= CLOSE_ALWAYS_WIDTH || is_active || response.hovered();
+        let show_close = width >= CLOSE_ALWAYS_WIDTH || is_active || is_hovered;
 
         let title_left = icon_rect.right() + 4.0;
         let title_right = if show_close {
@@ -1055,19 +1081,25 @@ fn draw_tab(
         );
 
         if show_close {
-            let close_btn = ui.put(
-                close_rect,
-                // U+00D7 `×` is present in the bundled Ubuntu font. Fancy
-                // marks such as U+2715 `✕` are *not* covered by any bundled
-                // font and render as tofu.
-                egui::Button::new(
-                    RichText::new("×")
-                        .size(15.0)
-                        .color(Color32::from_rgb(140, 145, 155)),
+            let close_btn = ui
+                .put(
+                    close_rect,
+                    // U+00D7 `×` is present in the bundled Ubuntu font. Fancy
+                    // marks such as U+2715 `✕` are *not* covered by any bundled
+                    // font and render as tofu.
+                    egui::Button::new(
+                        RichText::new("×")
+                            .size(15.0)
+                            .color(Color32::from_rgb(180, 185, 195)),
+                    )
+                    .min_size(Vec2::splat(CLOSE_BOX))
+                    .fill(Color32::TRANSPARENT)
+                    .corner_radius(CornerRadius::same(9)),
                 )
-                .frame(false),
-            );
+                .on_hover_text("Close tab (Ctrl+W)")
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
             if close_btn.clicked() {
+                close_clicked = true;
                 actions.push(TabAction::Close(tab.id));
             }
         }
@@ -1094,7 +1126,9 @@ fn draw_tab(
         }
         response.on_hover_text(text)
     };
-    queue_tab_interaction(ui, &response, state, tab, is_selected, actions);
+    if !close_clicked {
+        queue_tab_interaction(ui, &response, state, tab, is_selected, actions);
+    }
     rect
 }
 
@@ -1172,7 +1206,11 @@ fn draw_group_chip(
     let painter = ui.painter().clone();
     // Low-alpha fill keeps the group colour as a hint rather than a slab, and
     // hover lifts it slightly so the chip reads as interactive.
-    let fill_alpha = if response.hovered() { 70 } else { 42 };
+    let fill_alpha = if response.hovered() || ui.rect_contains_pointer(rect) {
+        70
+    } else {
+        42
+    };
     painter.rect_filled(
         rect,
         rounding,
@@ -1253,7 +1291,9 @@ fn draw_group_chip(
         },
         actions,
     );
-    let _ = response.on_hover_text(group.name.as_str());
+    let _ = response
+        .on_hover_text(group.name.as_str())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
     rect
 }
 
@@ -1575,4 +1615,22 @@ mod tests {
         assert_eq!(marker_x(&[], 0), None);
     }
 
+    #[test]
+    fn dragging_into_empty_row_stays_in_drop_band() {
+        let strip = Rect::from_min_size(pos2(0.0, 4.0), vec2(240.0, TAB_HEIGHT));
+        let row = Rect::from_min_size(pos2(0.0, 4.0), vec2(1280.0, TAB_HEIGHT));
+        assert!(is_in_drop_band(strip, row, pos2(700.0, 18.0)));
+        assert!(!is_in_drop_band(strip, row, pos2(700.0, 120.0)));
+    }
+
+    #[test]
+    fn leftover_strip_spans_between_add_and_search() {
+        let row = Rect::from_min_size(pos2(0.0, 4.0), vec2(1280.0, TAB_HEIGHT));
+        let add = Rect::from_min_size(pos2(242.0, 4.0), vec2(ADD_BUTTON_WIDTH, TAB_HEIGHT));
+        let search = Rect::from_min_size(pos2(1250.0, 4.0), vec2(SEARCH_BUTTON_WIDTH, TAB_HEIGHT));
+        let leftover = leftover_strip_rect(add, search, row);
+        assert!(leftover.width() > 900.0);
+        assert_eq!(leftover.left(), add.right() + TAB_GAP);
+        assert_eq!(leftover.right(), search.left() - TAB_GAP);
+    }
 }

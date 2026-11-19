@@ -12,7 +12,10 @@
 //! The file is written on a clean shutdown only, so a crash leaves the
 //! previous session intact instead of a half-written one.
 
-use crate::browser::{Bookmark, BrowserState, ConsoleLevel, GroupColor, SavedGroup};
+use crate::browser::{
+    Bookmark, BrowserSettings, BrowserState, ConsoleLevel, GroupColor, HistoryEntry,
+    ReadingListItem, SavedGroup, StartupMode,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -61,6 +64,15 @@ pub struct Session {
     /// Groups the user saved for later.
     #[serde(default)]
     pub saved_groups: Vec<SavedGroup>,
+    /// Browsing history entries.
+    #[serde(default)]
+    pub history: Vec<HistoryEntry>,
+    /// Reading List items.
+    #[serde(default)]
+    pub reading_list: Vec<ReadingListItem>,
+    /// Persistent browser settings.
+    #[serde(default)]
+    pub settings: BrowserSettings,
 }
 
 impl Session {
@@ -91,6 +103,9 @@ impl Session {
             active: state.active_tab_index(),
             bookmarks: state.bookmarks.clone(),
             saved_groups: state.saved_groups.clone(),
+            history: state.history.clone(),
+            reading_list: state.reading_list.clone(),
+            settings: state.settings.clone(),
         }
     }
 
@@ -105,6 +120,10 @@ impl Session {
         // they are rebuilt from the snapshot like the tabs are.
         state.bookmarks = self.bookmarks.clone();
         state.saved_groups = self.saved_groups.clone();
+        state.history = self.history.clone();
+        state.reading_list = self.reading_list.clone();
+        state.settings = self.settings.clone();
+        state.apply_settings_to_policy();
 
         let mut group_ids: Vec<Option<u64>> = vec![None; self.groups.len()];
 
@@ -213,12 +232,26 @@ pub fn restore(state: &mut BrowserState) -> bool {
         }
         return false;
     };
-    if !session.is_worth_restoring() {
-        // Bookmarks and saved groups are not tied to the tab strip, so they
-        // still load: a user who closed everything last time expects the bar
-        // to be there.
+    if !session.is_worth_restoring() || session.settings.startup_mode != StartupMode::ContinueSession {
         state.bookmarks = session.bookmarks;
         state.saved_groups = session.saved_groups;
+        state.history = session.history;
+        state.reading_list = session.reading_list;
+        state.settings = session.settings;
+        state.apply_settings_to_policy();
+        if state.settings.startup_mode == StartupMode::CustomUrls
+            && !state.settings.startup_urls.is_empty()
+        {
+            state.clear_for_restore();
+            for url in state.settings.startup_urls.clone() {
+                if !url.trim().is_empty() {
+                    state.create_tab(&url);
+                }
+            }
+            if state.tabs.is_empty() {
+                state.create_tab(START_PAGE);
+            }
+        }
         return false;
     }
 
@@ -238,6 +271,9 @@ pub fn restore(state: &mut BrowserState) -> bool {
 /// Writes the current strip to disk. Failures are silent by design: a browser
 /// must never refuse to close because its session file is not writable.
 pub fn save(state: &BrowserState) {
+    if state.is_incognito {
+        return;
+    }
     let Some(path) = session_path() else {
         return;
     };

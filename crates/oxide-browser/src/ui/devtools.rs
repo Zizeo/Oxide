@@ -5,67 +5,73 @@ use oxide_dom::{Document, NodeData, NodeId};
 use crate::browser::{BrowserState, ConsoleLevel, DevToolsTab};
 
 pub fn render_devtools(ui: &mut Ui, state: &mut BrowserState) {
-    // Top bar of DevTools
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
-
-        ui.label(
-            RichText::new("🛠 DevTools")
-                .strong()
-                .size(13.0)
-                .color(Color32::from_rgb(56, 189, 248)),
-        );
-
-        ui.separator();
-
-        // DevTools Tabs: Elements (DOM), Network, Source, Console
-        let tabs = [
-            (DevToolsTab::Elements, "🌳 Elements (DOM)"),
-            (DevToolsTab::Network, "🌐 Network"),
-            (DevToolsTab::Source, "📄 Raw Source"),
-            (DevToolsTab::Console, "💻 Console"),
-        ];
-
-        for (tab_type, label) in tabs {
-            let is_selected = state.devtools_tab == tab_type;
-            let btn = ui.add(
+    // Top bar of DevTools: close button pinned right, tabs horizontally scrollable
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if ui
+            .add(
                 egui::Button::new(
-                    RichText::new(label)
+                    RichText::new("✕")
                         .size(12.0)
-                        .color(if is_selected {
-                            Color32::WHITE
-                        } else {
-                            Color32::from_rgb(156, 163, 175)
-                        }),
+                        .color(Color32::from_rgb(156, 163, 175)),
                 )
-                .fill(if is_selected {
-                    Color32::from_rgb(45, 48, 58)
-                } else {
-                    Color32::TRANSPARENT
-                })
-                .corner_radius(CornerRadius::same(4)),
-            );
-
-            if btn.clicked() {
-                state.devtools_tab = tab_type;
-            }
+                .frame(false),
+            )
+            .on_hover_text("Close DevTools (F12)")
+            .clicked()
+        {
+            state.show_devtools = false;
         }
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add(
-                    egui::Button::new(
-                        RichText::new("×")
-                            .size(12.0)
-                            .color(Color32::from_rgb(156, 163, 175)),
-                    )
-                    .frame(false),
-                )
-                .clicked()
-            {
-                state.show_devtools = false;
-            }
-        });
+        ScrollArea::horizontal()
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+
+                    ui.label(
+                        RichText::new("DevTools")
+                            .strong()
+                            .size(12.5)
+                            .color(Color32::from_rgb(96, 165, 250)),
+                    );
+
+                    ui.separator();
+
+                    let tabs = [
+                        (DevToolsTab::Elements, "Elements"),
+                        (DevToolsTab::Network, "Network"),
+                        (DevToolsTab::Source, "Sources"),
+                        (DevToolsTab::Console, "Console"),
+                        (DevToolsTab::Performance, "Performance"),
+                        (DevToolsTab::Application, "Application"),
+                    ];
+
+                    for (tab_type, label) in tabs {
+                        let is_selected = state.devtools_tab == tab_type;
+                        let btn = ui.add(
+                            egui::Button::new(
+                                RichText::new(label)
+                                    .size(12.0)
+                                    .color(if is_selected {
+                                        Color32::WHITE
+                                    } else {
+                                        Color32::from_rgb(156, 163, 175)
+                                    }),
+                            )
+                            .fill(if is_selected {
+                                Color32::from_rgb(45, 48, 58)
+                            } else {
+                                Color32::TRANSPARENT
+                            })
+                            .corner_radius(CornerRadius::same(4)),
+                        );
+
+                        if btn.clicked() {
+                            state.devtools_tab = tab_type;
+                        }
+                    }
+                });
+            });
     });
 
     ui.separator();
@@ -76,6 +82,69 @@ pub fn render_devtools(ui: &mut Ui, state: &mut BrowserState) {
         DevToolsTab::Network => render_network_tab(ui, state),
         DevToolsTab::Source => render_source_tab(ui, state),
         DevToolsTab::Console => render_console_tab(ui, state),
+        DevToolsTab::Performance => render_performance_tab(ui, state),
+        DevToolsTab::Application => render_application_tab(ui, state),
+    }
+}
+
+fn render_performance_tab(ui: &mut Ui, state: &BrowserState) {
+    let Some(tab) = state.active_tab() else {
+        ui.label(RichText::new("No active tab.").color(Color32::GRAY));
+        return;
+    };
+    let Some([style_ms, layout_ms, paint_ms, js_ms]) = tab.perf_timings_ms else {
+        ui.label(
+            RichText::new("No Rust-pipeline timings recorded for this tab yet.")
+                .color(Color32::from_rgb(156, 163, 175)),
+        );
+        return;
+    };
+    let total = (style_ms + layout_ms + paint_ms + js_ms).max(0.01);
+    ui.label(
+        RichText::new(format!("Measured Pipeline Breakdown ({total:.2} ms total)"))
+            .strong()
+            .color(Color32::WHITE),
+    );
+    ui.add_space(6.0);
+    for (name, ms, color) in [
+        ("Style", style_ms, Color32::from_rgb(96, 165, 250)),
+        ("Layout", layout_ms, Color32::from_rgb(167, 139, 250)),
+        ("Paint", paint_ms, Color32::from_rgb(74, 222, 128)),
+        ("JS", js_ms, Color32::from_rgb(251, 191, 36)),
+    ] {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{name:<7} {ms:.2} ms")).monospace().size(11.5));
+            let frac = (ms / total).clamp(0.02, 1.0);
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(220.0 * frac, 10.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 2.0, color);
+        });
+    }
+}
+
+fn render_application_tab(ui: &mut Ui, state: &mut BrowserState) {
+    let Some(tab) = state.active_tab() else {
+        ui.label(RichText::new("No active tab.").color(Color32::GRAY));
+        return;
+    };
+    ui.label(RichText::new("Storage & Extensions").strong().color(Color32::WHITE));
+    ui.add_space(4.0);
+    if let Some(js) = &tab.js_runtime
+        && let Ok(mut rt) = js.try_borrow_mut()
+    {
+        let cookies = rt.eval("document.cookie").unwrap_or_default();
+        let ls_len = rt.eval("localStorage.length").unwrap_or_else(|_| "0".into());
+        ui.label(format!("document.cookie: {cookies}"));
+        ui.label(format!("localStorage entries: {ls_len}"));
+    } else {
+        ui.label(RichText::new("No active JS runtime on this tab.").color(Color32::GRAY));
+    }
+    ui.separator();
+    ui.label(format!("Loaded WebExtensions: {}", state.extensions.extensions.len()));
+    for ext in &mut state.extensions.extensions {
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut ext.enabled, &ext.manifest.name);
+            ui.label(RichText::new(format!("v{}", ext.manifest.version)).size(11.0).color(Color32::GRAY));
+        });
     }
 }
 
@@ -110,11 +179,11 @@ fn render_dom_inspector(ui: &mut Ui, state: &mut BrowserState) {
     };
 
     // Filter toolbar & DOM Statistics
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(8.0, 4.0);
 
         ui.label(
-            RichText::new("🔍 Filter:")
+            RichText::new("Filter:")
                 .size(11.5)
                 .color(Color32::from_rgb(156, 163, 175)),
         );
@@ -171,6 +240,7 @@ fn render_dom_inspector(ui: &mut Ui, state: &mut BrowserState) {
             ui.add_space(4.0);
 
             ScrollArea::both()
+                .id_salt("devtools_dom_tree_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if let Some(root_id) = doc.root {
@@ -196,7 +266,8 @@ fn render_dom_inspector(ui: &mut Ui, state: &mut BrowserState) {
             );
             ui.add_space(4.0);
 
-            ScrollArea::vertical()
+            ScrollArea::both()
+                .id_salt("devtools_node_details_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if let Some(node_id) = selected_node {
@@ -286,11 +357,7 @@ fn render_dom_tree_node(
         NodeData::Comment { content } => {
             ui.horizontal(|ui| {
                 ui.add_space(depth as f32 * 12.0);
-                let text = if content.len() > 30 {
-                    format!("<!-- {}... -->", &content[..27])
-                } else {
-                    format!("<!-- {} -->", content)
-                };
+                let text = format!("<!-- {} -->", truncate_chars(content, 30));
                 let label = ui.selectable_label(
                     is_selected,
                     RichText::new(text)
@@ -308,11 +375,7 @@ fn render_dom_tree_node(
             if !trimmed.is_empty() {
                 ui.horizontal(|ui| {
                     ui.add_space(depth as f32 * 12.0);
-                    let display_text = if trimmed.len() > 35 {
-                        format!("\"{}...\"", &trimmed[..32])
-                    } else {
-                        format!("\"{}\"", trimmed)
-                    };
+                    let display_text = format!("\"{}\"", truncate_chars(trimmed, 35));
                     let label = ui.selectable_label(
                         is_selected,
                         RichText::new(display_text)
@@ -576,7 +639,14 @@ fn render_node_details(
 
                                 for (name, val) in attributes {
                                     ui.label(RichText::new(name).monospace().color(Color32::from_rgb(251, 191, 36)));
-                                    ui.label(RichText::new(format!("\"{}\"", val)).monospace().color(Color32::from_rgb(226, 232, 240)));
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(format!("\"{}\"", truncate_chars(val, 240)))
+                                                .monospace()
+                                                .color(Color32::from_rgb(226, 232, 240)),
+                                        )
+                                        .wrap(),
+                                    );
                                     ui.end_row();
                                 }
                             });
@@ -602,10 +672,13 @@ fn render_node_details(
                         .corner_radius(CornerRadius::same(4))
                         .inner_margin(Margin::same(8))
                         .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(trimmed_text)
-                                    .size(12.0)
-                                    .color(Color32::from_rgb(209, 213, 219)),
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(trimmed_text)
+                                        .size(12.0)
+                                        .color(Color32::from_rgb(209, 213, 219)),
+                                )
+                                .wrap(),
                             );
                         });
                 }
@@ -673,15 +746,24 @@ fn render_network_tab(ui: &mut Ui, state: &mut BrowserState) {
         None => return,
     };
 
-    ScrollArea::vertical().show(ui, |ui| {
+    ScrollArea::vertical()
+        .id_salt("devtools_network_scroll")
+        .show(ui, |ui| {
         if let Some(resp) = &active_tab.response {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new("Request URL:")
                         .strong()
                         .color(Color32::from_rgb(209, 213, 219)),
                 );
-                ui.label(RichText::new(&resp.url).monospace().color(Color32::from_rgb(56, 189, 248)));
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&resp.url)
+                            .monospace()
+                            .color(Color32::from_rgb(56, 189, 248)),
+                    )
+                    .wrap(),
+                );
             });
 
             ui.add_space(4.0);
@@ -734,16 +816,19 @@ fn render_network_tab(ui: &mut Ui, state: &mut BrowserState) {
                         );
                     } else {
                         for (k, v) in &resp.headers {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(
                                     RichText::new(format!("{}:", k))
                                         .monospace()
                                         .color(Color32::from_rgb(147, 197, 253)),
                                 );
-                                ui.label(
-                                    RichText::new(v)
-                                        .monospace()
-                                        .color(Color32::from_rgb(226, 232, 240)),
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(v)
+                                            .monospace()
+                                            .color(Color32::from_rgb(226, 232, 240)),
+                                    )
+                                    .wrap(),
                                 );
                             });
                         }
@@ -778,7 +863,9 @@ fn render_source_tab(ui: &mut Ui, state: &mut BrowserState) {
 
         ui.add_space(4.0);
 
-        ScrollArea::vertical().show(ui, |ui| {
+        ScrollArea::vertical()
+            .id_salt("devtools_source_scroll")
+            .show(ui, |ui| {
             let mut code = resp.body.as_str();
             ui.add(
                 egui::TextEdit::multiline(&mut code)
@@ -795,29 +882,44 @@ fn render_source_tab(ui: &mut Ui, state: &mut BrowserState) {
 fn render_console_tab(ui: &mut Ui, state: &mut BrowserState) {
     let mut script_to_run: Option<String> = None;
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(
-            RichText::new(format!("Log Entries ({})", state.console_logs.len()))
+            RichText::new(format!("Logs ({})", state.console_logs.len()))
                 .strong()
-                .color(Color32::from_rgb(209, 213, 219)),
+                .color(Color32::from_rgb(212, 216, 226)),
         );
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("🗑 Clear Console").clicked() {
-                state.console_logs.clear();
+        for (lvl, name) in [
+            (None, "All"),
+            (Some(ConsoleLevel::Info), "Info"),
+            (Some(ConsoleLevel::Warn), "Warn"),
+            (Some(ConsoleLevel::Error), "Error"),
+            (Some(ConsoleLevel::Net), "Net"),
+        ] {
+            if ui
+                .selectable_label(state.console_filter == lvl, name)
+                .clicked()
+            {
+                state.console_filter = lvl;
             }
-        });
+        }
+        if ui.button("Clear").clicked() {
+            state.console_logs.clear();
+        }
     });
 
     ui.separator();
 
     // Scrollable Console logs
     ScrollArea::vertical()
-        .max_height(ui.available_height() - 40.0)
+        .id_salt("devtools_console_scroll")
+        .max_height((ui.available_height() - 40.0).max(60.0))
         .stick_to_bottom(true)
         .show(ui, |ui| {
             for entry in &state.console_logs {
-                ui.horizontal(|ui| {
+                if state.console_filter.is_some_and(|f| f != entry.level) {
+                    continue;
+                }
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new(&entry.timestamp)
                             .monospace()
@@ -840,11 +942,14 @@ fn render_console_tab(ui: &mut Ui, state: &mut BrowserState) {
                             .color(level_color),
                     );
 
-                    ui.label(
-                        RichText::new(&entry.message)
-                            .monospace()
-                            .size(12.0)
-                            .color(Color32::from_rgb(226, 232, 240)),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&entry.message)
+                                .monospace()
+                                .size(12.0)
+                                .color(Color32::from_rgb(226, 232, 240)),
+                        )
+                        .wrap(),
                     );
                 });
             }
@@ -852,41 +957,49 @@ fn render_console_tab(ui: &mut Ui, state: &mut BrowserState) {
 
     ui.separator();
 
-    // Interactive JavaScript REPL Input Bar
+    // Interactive JavaScript REPL Input Bar (right_to_left so Run button never clips)
     if let Some(active_tab) = state.active_tab_mut() {
-        ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
-            ui.label(
-                RichText::new("JS >")
-                    .monospace()
-                    .strong()
-                    .size(13.0)
-                    .color(Color32::from_rgb(56, 189, 248)),
-            );
-
-            let repl_width = ui.available_width() - 80.0;
-            let text_edit = egui::TextEdit::singleline(&mut active_tab.js_repl_input)
-                .desired_width(repl_width.max(100.0))
-                .hint_text("Enter JavaScript expression (e.g. document.title = 'New Title', console.log(1+2))...")
-                .font(egui::TextStyle::Monospace);
-
-            let resp = ui.add(text_edit);
-            let enter_pressed = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
             let eval_btn = ui.add(
                 egui::Button::new(
-                    RichText::new("▶ Run")
+                    RichText::new("Run")
                         .size(12.0)
-                        .color(Color32::from_rgb(56, 189, 248)),
+                        .color(Color32::from_rgb(96, 165, 250)),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(Color32::from_rgb(26, 40, 64))
                 .corner_radius(CornerRadius::same(4)),
             );
 
-            if (enter_pressed || eval_btn.clicked()) && !active_tab.js_repl_input.trim().is_empty() {
-                script_to_run = Some(active_tab.js_repl_input.trim().to_string());
-                active_tab.js_repl_input.clear();
-            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new("JS >")
+                        .monospace()
+                        .strong()
+                        .size(12.5)
+                        .color(Color32::from_rgb(96, 165, 250)),
+                );
+
+                let text_edit = egui::TextEdit::singleline(&mut active_tab.js_repl_input)
+                    .desired_width(ui.available_width().max(80.0))
+                    .hint_text("Enter JavaScript expression…")
+                    .font(egui::TextStyle::Monospace);
+
+                let resp = ui.add(text_edit);
+                let enter_pressed =
+                    resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+                if (enter_pressed || eval_btn.clicked())
+                    && !active_tab.js_repl_input.trim().is_empty()
+                {
+                    script_to_run = Some(active_tab.js_repl_input.trim().to_string());
+                    active_tab.js_repl_input.clear();
+                }
+                if enter_pressed {
+                    resp.request_focus();
+                }
+            });
         });
     }
 
@@ -935,5 +1048,30 @@ fn render_console_tab(ui: &mut Ui, state: &mut BrowserState) {
                 );
             }
         }
+    }
+}
+
+/// Truncates `text` to at most `max_chars` Unicode scalar values cleanly.
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+    let keep = max_chars.saturating_sub(3);
+    let mut out: String = text.chars().take(keep).collect();
+    out.push_str("...");
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_chars_never_panics_on_multibyte_utf8() {
+        let comment = "🦀🔥 Café — 日本語コメントが長い場合のテストケースです";
+        let shortened = truncate_chars(comment, 12);
+        assert_eq!(shortened.chars().count(), 12);
+        assert!(shortened.ends_with("..."));
+        assert_eq!(truncate_chars("abc", 10), "abc");
     }
 }

@@ -105,6 +105,7 @@ pub enum TabAction {
 
     // ---- navigation ----
     Reload(u64),
+    HardReload(u64),
     ToggleDevtools,
     ActivateRelative(isize),
     ActivateIndex(usize),
@@ -112,6 +113,44 @@ pub enum TabAction {
     ActivateLast,
     /// Ctrl+L: focus and select the contents of the omnibox.
     FocusOmnibox,
+    /// Ctrl+N / App menu: open a new browser window.
+    NewWindow,
+    /// Ctrl+Shift+N / App menu: open a new Incognito window.
+    NewIncognitoWindow,
+    /// Ctrl+Shift+Del: open the Clear browsing data modal.
+    OpenClearDataModal,
+    /// Escape: close the Clear browsing data modal.
+    CloseClearDataModal,
+    /// Save the tab to the Reading List.
+    AddToReadingList(u64),
+    /// Shift+Esc: toggle the Browser Task Manager window.
+    ToggleTaskManager,
+    /// Escape: close the Browser Task Manager window.
+    CloseTaskManager,
+    /// Ctrl+Shift+B: toggle the Bookmarks bar visibility.
+    ToggleBookmarksBar,
+    /// Open `url` in a new tab.
+    OpenInNewTab(String),
+    /// Open `url` in a new browser window.
+    OpenInNewWindow(String),
+    /// F11 / App menu: toggle borderless fullscreen on the active window.
+    ToggleFullscreen,
+    /// Ctrl++ / Ctrl+- / Ctrl+0: per-tab zoom controls.
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    /// Ctrl+F: open or focus the Find in Page bar.
+    OpenFindBar,
+    /// Escape / close button: close the Find in Page bar and clear highlights.
+    CloseFindBar,
+    /// Ctrl+P / App menu: print the active page.
+    Print,
+    GoBack,
+    GoForward,
+    /// Open DevTools on a specific tab (e.g. `Elements` or `Source`).
+    OpenDevtools(DevToolsTab),
+    /// Exit the application.
+    ExitApp,
 }
 
 /// Applies a single action. Never panics on stale ids: the tab may have been
@@ -123,7 +162,10 @@ pub fn apply(state: &mut BrowserState, action: TabAction) {
         TabAction::ExtendSelection(id) => state.extend_selection_to(id),
         TabAction::SelectAll => state.select_all_tabs(),
         TabAction::ClearSelection => state.clear_selection(),
-        TabAction::OpenTabSearch => state.open_tab_search(),
+        TabAction::OpenTabSearch => {
+            state.group_rename = None;
+            state.open_tab_search();
+        }
     TabAction::OpenMenu { kind, pos } => {
         state.pending_menu = Some(crate::browser::PendingMenu { kind, pos });
     }
@@ -206,6 +248,7 @@ pub fn apply(state: &mut BrowserState, action: TabAction) {
         TabAction::CloseGroup(group) => state.close_group(group),
 
         TabAction::Reload(id) => state.reload_tab(id),
+        TabAction::HardReload(id) => state.hard_reload_tab(id),
         TabAction::ToggleDevtools => {
             state.show_devtools = !state.show_devtools;
             if state.show_devtools {
@@ -228,7 +271,49 @@ pub fn apply(state: &mut BrowserState, action: TabAction) {
                 state.activate_tab(id);
             }
         }
-        TabAction::FocusOmnibox => state.focus_omnibox_request = true,
+        TabAction::FocusOmnibox => {
+            state.close_tab_search();
+            state.group_rename = None;
+            state.focus_omnibox_request = true;
+        }
+        TabAction::NewWindow => state.pending_new_window = true,
+        TabAction::NewIncognitoWindow => state.pending_new_incognito_window = true,
+        TabAction::OpenClearDataModal => state.clear_data_modal_open = true,
+        TabAction::CloseClearDataModal => state.clear_data_modal_open = false,
+        TabAction::AddToReadingList(id) => {
+            if let Some(tab) = state.tab(id).cloned() {
+                state.add_to_reading_list(&tab.title, &tab.url);
+            }
+        }
+        TabAction::ToggleTaskManager => {
+            state.task_manager_open = !state.task_manager_open;
+        }
+        TabAction::CloseTaskManager => {
+            state.task_manager_open = false;
+        }
+        TabAction::ToggleBookmarksBar => {
+            state.settings.show_bookmarks_bar = !state.settings.show_bookmarks_bar;
+        }
+        TabAction::OpenInNewTab(url) => {
+            state.create_tab(&url);
+        }
+        TabAction::OpenInNewWindow(url) => {
+            state.pending_open_url_in_new_window = Some(url);
+        }
+        TabAction::ToggleFullscreen => state.pending_fullscreen_toggle = true,
+        TabAction::ZoomIn => state.adjust_active_tab_zoom(0.1),
+        TabAction::ZoomOut => state.adjust_active_tab_zoom(-0.1),
+        TabAction::ZoomReset => state.set_active_tab_zoom(1.0),
+        TabAction::OpenFindBar => {
+            state.find_bar_open = true;
+            state.find_bar_focus_request = true;
+        }
+        TabAction::CloseFindBar => state.clear_find(),
+        TabAction::Print => state.print_active_tab(),
+        TabAction::GoBack => state.go_back(),
+        TabAction::GoForward => state.go_forward(),
+        TabAction::OpenDevtools(tab) => state.open_devtools_tab(tab),
+        TabAction::ExitApp => state.pending_exit = true,
     }
 }
 
@@ -407,5 +492,38 @@ mod tests {
         apply(&mut s, TabAction::TogglePin(order[0]));
         apply(&mut s, TabAction::CloseToLeft(order[2]));
         assert_eq!(ids(&s), vec![order[0], order[2]]);
+    }
+
+    #[test]
+    fn zoom_actions_adjust_and_clamp_per_tab_zoom() {
+        let mut s = state();
+        assert_eq!(s.active_tab().unwrap().zoom_percent(), 100);
+        apply(&mut s, TabAction::ZoomIn);
+        assert_eq!(s.active_tab().unwrap().zoom_percent(), 110);
+        apply(&mut s, TabAction::ZoomOut);
+        assert_eq!(s.active_tab().unwrap().zoom_percent(), 100);
+        for _ in 0..20 {
+            apply(&mut s, TabAction::ZoomOut);
+        }
+        assert_eq!(s.active_tab().unwrap().zoom_percent(), 25);
+        apply(&mut s, TabAction::ZoomReset);
+        assert_eq!(s.active_tab().unwrap().zoom_percent(), 100);
+    }
+
+    #[test]
+    fn find_bar_and_window_actions_set_expected_flags() {
+        let mut s = state();
+        apply(&mut s, TabAction::OpenFindBar);
+        assert!(s.find_bar_open);
+        assert!(s.find_bar_focus_request);
+        apply(&mut s, TabAction::CloseFindBar);
+        assert!(!s.find_bar_open);
+
+        apply(&mut s, TabAction::NewWindow);
+        apply(&mut s, TabAction::ToggleFullscreen);
+        apply(&mut s, TabAction::ExitApp);
+        assert!(s.pending_new_window);
+        assert!(s.pending_fullscreen_toggle);
+        assert!(s.pending_exit);
     }
 }

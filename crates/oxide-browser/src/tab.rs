@@ -52,6 +52,10 @@ pub struct Tab {
     /// flag on every tab showing that site, and a single tab can be muted on
     /// its own. Effective muting is `muted || muted_hosts.contains(host)`.
     pub muted: bool,
+    /// Per-tab page zoom factor (`1.0` = 100%, clamped to `0.25..=3.0`).
+    pub zoom: f64,
+    /// Stage timings in ms when the Rust pipeline runs: `[style, layout, paint, js]`.
+    pub perf_timings_ms: Option<[f32; 4]>,
 }
 
 impl Tab {
@@ -81,7 +85,17 @@ impl Tab {
             last_activated: 0,
             audio_playing: false,
             muted: false,
+            zoom: 1.0,
+            perf_timings_ms: None,
         }
+    }
+
+    pub fn set_zoom(&mut self, zoom: f64) {
+        self.zoom = (zoom.clamp(0.25, 3.0) * 100.0).round() / 100.0;
+    }
+
+    pub fn zoom_percent(&self) -> u32 {
+        (self.zoom * 100.0).round() as u32
     }
 
     pub fn can_go_back(&self) -> bool {
@@ -93,7 +107,11 @@ impl Tab {
     }
 
     pub fn navigate_to(&mut self, raw_input: String) {
-        let url = oxide_net::security::resolve_omnibox_input(&raw_input);
+        self.navigate_to_with_search(raw_input, "https://www.google.com/search?q={query}");
+    }
+
+    pub fn navigate_to_with_search(&mut self, raw_input: String, search_template: &str) {
+        let url = oxide_net::security::resolve_omnibox_input_with_template(&raw_input, search_template);
         if self.loading && self.url == url {
             return;
         }
@@ -208,9 +226,11 @@ impl Tab {
             let js_mutated = Arc::new(AtomicBool::new(false));
 
             let mut js = JsRuntime::new(shared_doc.clone(), js_logs, js_mutated);
+            let t_js = std::time::Instant::now();
             if is_lightweight_doc {
                 let _ = js.execute_document_scripts();
             }
+            let js_ms = t_js.elapsed().as_secs_f32() * 1000.0;
 
             let final_doc = shared_doc.lock().unwrap().clone();
 
@@ -220,11 +240,19 @@ impl Tab {
                 self.title = t;
             }
             if is_lightweight_doc {
+                let t_style = std::time::Instant::now();
                 let styles = oxide_style::resolve_styles(&final_doc);
+                let style_ms = t_style.elapsed().as_secs_f32() * 1000.0;
+
+                let t_layout = std::time::Instant::now();
                 let layout = oxide_layout::compute_layout(&final_doc, &styles, 1000.0, 700.0);
+                let layout_ms = t_layout.elapsed().as_secs_f32() * 1000.0;
+
                 self.style_tree = Some(styles);
                 self.layout_tree = Some(layout);
+                self.perf_timings_ms = Some([style_ms, layout_ms, 0.0, js_ms]);
             } else {
+                self.perf_timings_ms = None;
                 self.style_tree = None;
                 self.layout_tree = None;
             }

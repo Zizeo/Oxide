@@ -26,13 +26,11 @@ use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Sense, Ui, Vec2};
 
 /// Bar background: darker than the nav bar above it `(45, 47, 54)` and
 /// lighter than the page below, so the strip reads as chrome.
-const BAR_FILL: Color32 = Color32::from_rgb(26, 27, 31);
-const CHIP_FILL: Color32 = Color32::from_rgb(32, 34, 38);
-const CHIP_HOVER_FILL: Color32 = Color32::from_rgb(45, 47, 54);
-const CHIP_TEXT: Color32 = Color32::from_rgb(180, 185, 195);
-const MUTED_TEXT: Color32 = Color32::from_rgb(120, 125, 135);
-const ON_COLOR: Color32 = Color32::from_rgb(74, 222, 128);
-const OFF_COLOR: Color32 = Color32::from_rgb(251, 191, 36);
+const BAR_FILL: Color32 = Color32::from_rgb(43, 45, 49);
+const CHIP_FILL: Color32 = Color32::TRANSPARENT;
+const CHIP_HOVER_FILL: Color32 = Color32::from_rgb(56, 58, 64);
+const CHIP_TEXT: Color32 = Color32::from_rgb(196, 200, 208);
+const MUTED_TEXT: Color32 = Color32::from_rgb(154, 160, 166);
 
 /// Chip height. A 20 pt row keeps the bar reading as chrome instead of as
 /// content, which matters because it never goes away.
@@ -61,13 +59,13 @@ const MAX_MENU_CHARS: usize = 48;
 /// shortcuts the nav bar used to hardcode: nothing disappears for a user who
 /// never saved a bookmark.
 const STARTERS: [(&str, &str); 7] = [
-    ("⚡ Welcome", "oxide://welcome"),
-    ("🔍 Google", "https://www.google.com"),
-    ("▶ YouTube", "https://www.youtube.com"),
-    ("⚙ Rust Lang", "https://www.rust-lang.org"),
-    ("📰 Hacker News", "https://news.ycombinator.com"),
-    ("🐙 GitHub", "https://github.com"),
-    ("📚 Wikipedia", "https://en.wikipedia.org"),
+    ("Welcome", "oxide://welcome"),
+    ("Google", "https://www.google.com"),
+    ("YouTube", "https://www.youtube.com"),
+    ("Rust Lang", "https://www.rust-lang.org"),
+    ("Hacker News", "https://news.ycombinator.com"),
+    ("GitHub", "https://github.com"),
+    ("Wikipedia", "https://en.wikipedia.org"),
 ];
 
 /// Draws the bookmarks strip: root bookmarks, one chip per folder, and the
@@ -81,30 +79,27 @@ pub fn render(ui: &mut Ui, state: &mut BrowserState) {
 
     egui::Frame::NONE
         .fill(BAR_FILL)
-        .inner_margin(egui::Margin::symmetric(8, 3))
+        .inner_margin(egui::Margin::symmetric(10, 3))
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
-
-            // Right-to-left: the shields are laid out first, so they stay
-            // pinned to the right edge no matter how much the bookmark list
-            // grows, and the scrolling row takes whatever is left.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                security_toggles(ui, state);
-
-                egui::ScrollArea::horizontal()
-                    .max_height(ROW_HEIGHT)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
-                        ui.horizontal(|ui| {
-                            if state.bookmarks.is_empty() {
-                                starter_chips(ui, &mut navigate_to);
-                            } else {
-                                bookmark_chips(ui, state, &mut navigate_to, &mut actions);
-                            }
-                        });
+            let wheel_y = ui.input(|i| i.smooth_scroll_delta.y);
+            if wheel_y != 0.0 && ui.rect_contains_pointer(ui.max_rect()) {
+                ui.scroll_with_delta(Vec2::new(wheel_y, 0.0));
+            }
+            egui::ScrollArea::horizontal()
+                .id_salt("oxide_bookmarks_bar_scroll")
+                .max_height(ROW_HEIGHT)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+                    ui.horizontal(|ui| {
+                        ui.set_height(CHIP_HEIGHT);
+                        if state.bookmarks.is_empty() {
+                            starter_chips(ui, state, &mut navigate_to);
+                        } else {
+                            bookmark_chips(ui, state, &mut navigate_to, &mut actions);
+                        }
                     });
-            });
+                });
         });
 
     if let Some(url) = navigate_to {
@@ -114,10 +109,9 @@ pub fn render(ui: &mut Ui, state: &mut BrowserState) {
 }
 
 /// The starter shortcuts, shown only while no bookmark exists.
-fn starter_chips(ui: &mut Ui, navigate_to: &mut Option<String>) {
-    ui.label(RichText::new("Bookmarks:").size(11.0).color(MUTED_TEXT));
+fn starter_chips(ui: &mut Ui, state: &BrowserState, navigate_to: &mut Option<String>) {
     for (label, url) in STARTERS {
-        let response = chip(ui, None, label).on_hover_text(url);
+        let response = chip(ui, site_icon(ui, state, url), label).on_hover_text(url);
         if response.clicked() {
             *navigate_to = Some(url.to_owned());
         }
@@ -131,7 +125,6 @@ fn bookmark_chips(
     navigate_to: &mut Option<String>,
     actions: &mut Vec<TabAction>,
 ) {
-    ui.label(RichText::new("Bookmarks:").size(11.0).color(MUTED_TEXT));
 
     // Folder counts are gathered in first-seen order: "Bookmark all tabs"
     // appends a whole folder at once, and one chip per tab would push the
@@ -155,7 +148,12 @@ fn bookmark_chips(
             continue;
         }
 
-        let label = truncate(&bookmark.title, MAX_LABEL_CHARS);
+        let raw_title = if bookmark.title.trim().is_empty() {
+            bookmark.url.as_str()
+        } else {
+            bookmark.title.as_str()
+        };
+        let label = truncate(raw_title, MAX_LABEL_CHARS);
         let response = chip(ui, site_icon(ui, state, &bookmark.url), &label)
             .on_hover_text(bookmark.url.as_str());
         if response.clicked() {
@@ -189,8 +187,8 @@ fn folder_chip(
     count: usize,
     actions: &mut Vec<TabAction>,
 ) {
-    let label = format!("📁 {folder} ({count})");
-    let response = chip(ui, None, &label);
+    let label = format!("📁 {} ({count})", truncate(folder, MAX_LABEL_CHARS));
+    let response = chip(ui, None, &label).on_hover_text(format!("{folder} ({count} bookmarks)"));
     if response.clicked() {
         actions.push(TabAction::OpenMenu {
             kind: MenuKind::BookmarkFolder {
@@ -207,8 +205,9 @@ pub fn build_bookmark_menu(ui: &mut Ui, state: &BrowserState, url: &str) -> Menu
     let Some(bookmark) = state.bookmarks.iter().find(|b| b.url == url) else {
         return picks;
     };
+    ui.set_max_width(340.0);
     ui.label(RichText::new(truncate(&bookmark.title, MAX_MENU_CHARS)).strong());
-    ui.label(RichText::new(url).size(11.0).color(MUTED_TEXT));
+    ui.add(egui::Label::new(RichText::new(truncate(url, MAX_MENU_CHARS)).size(11.0).color(MUTED_TEXT)).truncate());
     ui.separator();
     if ui.button("Remove bookmark").clicked() {
         picks.push(TabAction::RemoveBookmark(url.to_owned()));
@@ -219,7 +218,8 @@ pub fn build_bookmark_menu(ui: &mut Ui, state: &BrowserState, url: &str) -> Menu
 /// Contents of a folder chip's dropdown.
 pub fn build_folder_menu(ui: &mut Ui, state: &BrowserState, folder: &str) -> MenuPicks {
     let mut picks = MenuPicks::default();
-    ui.label(RichText::new(format!("📁 {folder}")).strong());
+    ui.set_max_width(340.0);
+    ui.label(RichText::new(format!("📁 {}", truncate(folder, MAX_MENU_CHARS))).strong());
     ui.separator();
     for bookmark in state
         .bookmarks
@@ -244,69 +244,6 @@ pub fn build_folder_menu(ui: &mut Ui, state: &BrowserState, folder: &str) -> Men
         picks.push(TabAction::RemoveBookmarkFolder(folder.to_owned()));
     }
     picks
-}
-
-/// The two security shields, pinned to the right end of the bar.
-///
-/// They live here rather than in the nav bar because this row always has
-/// spare room on the right; the omnibox needs every pixel it can get.
-fn security_toggles(ui: &mut Ui, state: &mut BrowserState) {
-    let (https_only, block_private) = {
-        let policy = state.security_policy.read().unwrap();
-        (policy.https_only, policy.block_private_networks)
-    };
-
-    let lan_btn = ui.add(
-        egui::Button::new(
-            RichText::new(if block_private {
-                "🛡 SSRF/LAN Guard: ON"
-            } else {
-                "⚠ SSRF/LAN Guard: OFF"
-            })
-            .size(10.5)
-            .color(if block_private { ON_COLOR } else { OFF_COLOR }),
-        )
-        .fill(Color32::from_rgb(28, 32, 38))
-        .corner_radius(CornerRadius::same(4)),
-    );
-    if lan_btn.clicked() {
-        set_block_private(state, !block_private);
-    }
-
-    let https_btn = ui.add(
-        egui::Button::new(
-            RichText::new(if https_only {
-                "🔒 HTTPS-Only: ON"
-            } else {
-                "🔓 HTTPS-Only: OFF"
-            })
-            .size(10.5)
-            .color(if https_only { ON_COLOR } else { OFF_COLOR }),
-        )
-        .fill(Color32::from_rgb(28, 32, 38))
-        .corner_radius(CornerRadius::same(4)),
-    );
-    if https_btn.clicked() {
-        set_https_only(state, !https_only);
-    }
-}
-
-/// Flips the HTTPS-Only shield.
-///
-/// The policy lives behind a `RwLock`, so the setter only needs a shared
-/// borrow: the bar owns `&mut BrowserState` but does not have to hand it out
-/// for an operation that is a single atomic flag.
-fn set_https_only(state: &BrowserState, on: bool) {
-    if let Ok(mut policy) = state.security_policy.write() {
-        policy.https_only = on;
-    }
-}
-
-/// Flips the SSRF/LAN shield.
-fn set_block_private(state: &BrowserState, on: bool) {
-    if let Ok(mut policy) = state.security_policy.write() {
-        policy.block_private_networks = on;
-    }
 }
 
 /// Paints one chip and returns its click response.
@@ -385,4 +322,27 @@ fn truncate(text: &str, max_chars: usize) -> String {
     let mut truncated: String = text.chars().take(max_chars.saturating_sub(1)).collect();
     truncated.push('…');
     truncated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_handles_multibyte_utf8_cleanly() {
+        let s = "🦀🔥 Rust & WebAssembly — 日本語テストタイトル";
+        let out = truncate(s, 10);
+        assert_eq!(out.chars().count(), 10);
+        assert!(out.ends_with('…'));
+        assert_eq!(truncate("Short", 10), "Short");
+    }
+
+    #[test]
+    fn navigable_allows_only_supported_schemes() {
+        assert!(navigable("https://example.com"));
+        assert!(navigable("http://localhost:8080"));
+        assert!(navigable("oxide://welcome"));
+        assert!(!navigable("javascript:alert(1)"));
+        assert!(!navigable("not a url"));
+    }
 }

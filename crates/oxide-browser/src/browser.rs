@@ -56,6 +56,26 @@ pub enum WebViewEvent {
         tab_id: u64,
         playing: bool,
     },
+    /// Reported by `window.__oxideFind` in the active WebView.
+    FindResult {
+        tab_id: u64,
+        active: usize,
+        count: usize,
+    },
+    /// Right-click inside the WebView viewport, intercepted via JS `contextmenu`.
+    ContextMenu {
+        tab_id: u64,
+        x: f32,
+        y: f32,
+        link_url: Option<String>,
+        img_url: Option<String>,
+        selection: Option<String>,
+        is_editable: bool,
+    },
+    /// A file download triggered inside a WebView.
+    DownloadRequested {
+        url: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +99,8 @@ pub enum DevToolsTab {
     Network,
     Source,
     Console,
+    Performance,
+    Application,
 }
 
 /// Chrome-style tab group colours.
@@ -224,6 +246,150 @@ pub struct SavedGroup {
     pub urls: Vec<String>,
 }
 
+/// One recorded page visit in persistent browsing history.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HistoryEntry {
+    pub url: String,
+    pub title: String,
+    pub visited_at: u64,
+}
+
+/// One saved article in the Reading List.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReadingListItem {
+    pub title: String,
+    pub url: String,
+    pub added_at: u64,
+    #[serde(default)]
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadStatus {
+    InProgress,
+    Paused,
+    Completed,
+    Cancelled,
+    Failed(String),
+}
+
+pub struct DownloadItem {
+    pub id: u64,
+    pub url: String,
+    pub filename: String,
+    pub save_path: std::path::PathBuf,
+    pub bytes_received: u64,
+    pub total_bytes: Option<u64>,
+    pub status: DownloadStatus,
+    pub paused: Arc<AtomicBool>,
+    pub cancelled: Arc<AtomicBool>,
+}
+
+pub enum DownloadEvent {
+    Progress {
+        id: u64,
+        bytes_received: u64,
+        total_bytes: Option<u64>,
+    },
+    Finished {
+        id: u64,
+        result: Result<(), String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearRange {
+    LastHour,
+    Last24Hours,
+    AllTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum SearchEngine {
+    #[default]
+    Google,
+    DuckDuckGo,
+    Bing,
+    Custom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum StartupMode {
+    Welcome,
+    #[default]
+    ContinueSession,
+    CustomUrls,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct BrowserSettings {
+    pub search_engine: SearchEngine,
+    pub custom_search_url: String,
+    pub startup_mode: StartupMode,
+    pub startup_urls: Vec<String>,
+    pub show_bookmarks_bar: bool,
+    pub default_zoom: f64,
+    pub https_only: bool,
+    pub block_private_networks: bool,
+    pub download_dir: std::path::PathBuf,
+    pub ask_download_location: bool,
+    pub memory_saver: bool,
+}
+
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        Self {
+            search_engine: SearchEngine::Google,
+            custom_search_url: "https://www.google.com/search?q={query}".to_string(),
+            startup_mode: StartupMode::ContinueSession,
+            startup_urls: Vec::new(),
+            show_bookmarks_bar: true,
+            default_zoom: 1.0,
+            https_only: true,
+            block_private_networks: true,
+            download_dir: default_download_dir(),
+            ask_download_location: false,
+            memory_saver: true,
+        }
+    }
+}
+
+impl BrowserSettings {
+    pub fn search_template(&self) -> &str {
+        match self.search_engine {
+            SearchEngine::Google => "https://www.google.com/search?q={query}",
+            SearchEngine::DuckDuckGo => "https://duckduckgo.com/?q={query}",
+            SearchEngine::Bing => "https://www.bing.com/search?q={query}",
+            SearchEngine::Custom => &self.custom_search_url,
+        }
+    }
+}
+
+pub fn default_download_dir() -> std::path::PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .map(|p| p.join("Downloads"))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+pub fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Returns `true` for internal `oxide://` management pages rendered natively by
+/// egui in the viewport (instead of inside a child `WebView`).
+pub fn is_internal_ui_page(url: &str) -> bool {
+    matches!(
+        url,
+        "oxide://history" | "oxide://downloads" | "oxide://bookmarks" | "oxide://settings"
+    )
+}
+
 /// What the browser knows about one site's icon.
 #[derive(Clone)]
 pub enum FaviconState {
@@ -303,6 +469,66 @@ const AUDIO_PROBE_JS: &str = r#"
     document.addEventListener('ended', report, true);
     document.addEventListener('volumechange', report, true);
     document.addEventListener('DOMContentLoaded', report, true);
+
+    var lastFindQuery = '';
+    var lastFindIdx = 0;
+
+    window.__oxideFind = function (query, dir) {
+        var q = (query || '');
+        if (!q) {
+            lastFindQuery = '';
+            lastFindIdx = 0;
+            try { window.getSelection().removeAllRanges(); } catch (e) {}
+            try { window.ipc.postMessage('oxide-find:0:0'); } catch (e) {}
+            return;
+        }
+        var text = (document.body && document.body.innerText) ? document.body.innerText : '';
+        var lowerText = text.toLowerCase();
+        var lowerQ = q.toLowerCase();
+        var count = 0;
+        var pos = 0;
+        while ((pos = lowerText.indexOf(lowerQ, pos)) !== -1) {
+            count++;
+            pos += lowerQ.length;
+        }
+        if (q !== lastFindQuery) {
+            try { window.getSelection().removeAllRanges(); } catch (e) {}
+            lastFindQuery = q;
+            lastFindIdx = 0;
+        }
+        var found = false;
+        try {
+            found = window.find(q, false, dir < 0, true, false, true, false);
+        } catch (e) {}
+        if (count === 0 || !found) {
+            lastFindIdx = 0;
+        } else if (dir < 0) {
+            lastFindIdx = lastFindIdx <= 1 ? count : lastFindIdx - 1;
+        } else {
+            lastFindIdx = lastFindIdx >= count ? 1 : lastFindIdx + 1;
+        }
+        try { window.ipc.postMessage('oxide-find:' + lastFindIdx + ':' + count); } catch (e) {}
+    };
+
+    document.addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        var t = e.target;
+        var a = t && t.closest ? t.closest('a[href]') : null;
+        var img = t && t.closest ? t.closest('img[src]') : null;
+        var sel = '';
+        try { sel = (window.getSelection ? window.getSelection().toString() : '').trim(); } catch (err) {}
+        var ed = !!(t && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'));
+        try {
+            window.ipc.postMessage('oxide-ctx:' + JSON.stringify({
+                x: e.clientX || 0,
+                y: e.clientY || 0,
+                link: a ? a.href : null,
+                img: img ? img.src : null,
+                sel: sel || null,
+                ed: ed
+            }));
+        } catch (err) {}
+    }, true);
 })();
 "#;
 
@@ -430,6 +656,36 @@ pub struct BrowserState {
     pub devtools_tab: DevToolsTab,
     pub devtools_height: f32,
     pub console_logs: Vec<ConsoleEntry>,
+    pub pending_new_window: bool,
+    pub pending_open_url_in_new_window: Option<String>,
+    pub pending_fullscreen_toggle: bool,
+    pub pending_exit: bool,
+    pub find_bar_open: bool,
+    pub find_bar_focus_request: bool,
+    pub find_query: String,
+    pub find_match_index: usize,
+    pub find_match_count: usize,
+    pub omnibox_suggestions_open: bool,
+    pub omnibox_focused: bool,
+    webview_zoom: HashMap<u64, f64>,
+    pub is_incognito: bool,
+    pub pending_new_incognito_window: bool,
+    pub history: Vec<HistoryEntry>,
+    pub reading_list: Vec<ReadingListItem>,
+    pub downloads: Vec<DownloadItem>,
+    pub next_download_id: u64,
+    download_tx: Sender<DownloadEvent>,
+    download_rx: Receiver<DownloadEvent>,
+    pub settings: BrowserSettings,
+    pub clear_data_modal_open: bool,
+    pub clear_data_range: ClearRange,
+    pub history_search: String,
+    pub bookmarks_search: String,
+    pub editing_bookmark: Option<usize>,
+    pub task_manager_open: bool,
+    pub console_filter: Option<ConsoleLevel>,
+    pub extensions: crate::extensions::ExtensionManager,
+    pub site_isolation: crate::renderer_ipc::SiteIsolationManager,
 }
 
 
@@ -444,6 +700,17 @@ impl BrowserState {
         browser
     }
 
+    pub fn new_incognito(tokio_handle: tokio::runtime::Handle) -> Self {
+        let mut browser = Self::empty(tokio_handle);
+        browser.is_incognito = true;
+        browser.log(
+            ConsoleLevel::Info,
+            "Incognito window opened (history & session persistence disabled).",
+        );
+        browser.create_tab("oxide://welcome");
+        browser
+    }
+
     /// A window with no tabs at all.
     ///
     /// Only a window created by tearing a tab off the strip starts this way;
@@ -452,6 +719,7 @@ impl BrowserState {
         let (tx, rx) = channel();
         let (wv_tx, wv_rx) = channel();
         let (fav_tx, fav_rx) = channel();
+        let (dl_tx, dl_rx) = channel();
         let net_engine = Arc::new(NetworkEngine::new());
         let security_policy = Arc::new(RwLock::new(SecurityPolicy::default()));
 
@@ -498,6 +766,229 @@ impl BrowserState {
             devtools_tab: DevToolsTab::Elements,
             devtools_height: 280.0,
             console_logs: Vec::new(),
+            pending_new_window: false,
+            pending_open_url_in_new_window: None,
+            pending_fullscreen_toggle: false,
+            pending_exit: false,
+            find_bar_open: false,
+            find_bar_focus_request: false,
+            find_query: String::new(),
+            find_match_index: 0,
+            find_match_count: 0,
+            omnibox_suggestions_open: false,
+            omnibox_focused: false,
+            webview_zoom: HashMap::new(),
+            is_incognito: false,
+            pending_new_incognito_window: false,
+            history: Vec::new(),
+            reading_list: Vec::new(),
+            downloads: Vec::new(),
+            next_download_id: 1,
+            download_tx: dl_tx,
+            download_rx: dl_rx,
+            settings: BrowserSettings::default(),
+            clear_data_modal_open: false,
+            clear_data_range: ClearRange::AllTime,
+            history_search: String::new(),
+            bookmarks_search: String::new(),
+            editing_bookmark: None,
+            task_manager_open: false,
+            console_filter: None,
+            extensions: crate::extensions::ExtensionManager::default(),
+            site_isolation: crate::renderer_ipc::SiteIsolationManager::default(),
+        }
+    }
+
+    pub fn set_active_tab_zoom(&mut self, zoom: f64) {
+        if let Some(tab) = self.active_tab_mut() {
+            tab.set_zoom(zoom);
+        }
+    }
+
+    pub fn adjust_active_tab_zoom(&mut self, delta: f64) {
+        if let Some(tab) = self.active_tab_mut() {
+            let next = tab.zoom + delta;
+            tab.set_zoom(next);
+        }
+    }
+
+    pub fn run_find(&mut self, dir: i32) {
+        let Some(active_id) = self.active_tab_id else {
+            return;
+        };
+        if let Some(wv) = self.webviews.get(&active_id) {
+            let q = serde_json::to_string(&self.find_query).unwrap_or_else(|_| "\"\"".to_string());
+            let _ = wv.evaluate_script(&format!(
+                "window.__oxideFind && window.__oxideFind({q}, {dir});"
+            ));
+        }
+    }
+
+    pub fn clear_find(&mut self) {
+        self.find_bar_open = false;
+        self.find_match_index = 0;
+        self.find_match_count = 0;
+        if let Some(active_id) = self.active_tab_id
+            && let Some(wv) = self.webviews.get(&active_id)
+        {
+            let _ = wv.evaluate_script("window.__oxideFind && window.__oxideFind('', 1);");
+        }
+    }
+
+    pub fn print_active_tab(&self) {
+        if let Some(active_id) = self.active_tab_id
+            && let Some(wv) = self.webviews.get(&active_id)
+        {
+            let _ = wv.evaluate_script("window.print();");
+        }
+    }
+
+    pub fn open_devtools_tab(&mut self, tab: DevToolsTab) {
+        self.show_devtools = true;
+        self.devtools_tab = tab;
+        self.fetch_active_tab_for_inspector();
+    }
+
+    pub fn apply_settings_to_policy(&self) {
+        let mut pol = self.security_policy.write().unwrap();
+        pol.https_only = self.settings.https_only;
+        pol.block_private_networks = self.settings.block_private_networks;
+    }
+
+    pub fn record_history(&mut self, url: &str, title: &str) {
+        if self.is_incognito || url.starts_with("oxide://") || url == "about:blank" {
+            return;
+        }
+        let clean_title = if title.trim().is_empty() { url } else { title };
+        if let Some(last) = self.history.last_mut()
+            && last.url == url
+        {
+            last.title = clean_title.to_string();
+            last.visited_at = unix_now();
+            return;
+        }
+        self.history.push(HistoryEntry {
+            url: url.to_string(),
+            title: clean_title.to_string(),
+            visited_at: unix_now(),
+        });
+        if self.history.len() > 2000 {
+            let excess = self.history.len() - 2000;
+            self.history.drain(0..excess);
+        }
+    }
+
+    pub fn clear_browsing_data(&mut self, range: ClearRange) {
+        let cutoff = match range {
+            ClearRange::LastHour => unix_now().saturating_sub(3600),
+            ClearRange::Last24Hours => unix_now().saturating_sub(86400),
+            ClearRange::AllTime => 0,
+        };
+        if cutoff == 0 {
+            self.history.clear();
+        } else {
+            self.history.retain(|h| h.visited_at < cutoff);
+        }
+        self.clear_data_modal_open = false;
+    }
+
+    pub fn add_to_reading_list(&mut self, title: &str, url: &str) {
+        if url.starts_with("oxide://") || self.reading_list.iter().any(|r| r.url == url) {
+            return;
+        }
+        self.reading_list.push(ReadingListItem {
+            title: if title.trim().is_empty() {
+                url.to_string()
+            } else {
+                title.to_string()
+            },
+            url: url.to_string(),
+            added_at: unix_now(),
+            read: false,
+        });
+    }
+
+    pub fn start_download(&mut self, url: &str) {
+        let id = self.next_download_id;
+        self.next_download_id += 1;
+
+        let filename = url::Url::parse(url)
+            .ok()
+            .and_then(|u| {
+                u.path_segments()
+                    .and_then(|mut s| s.next_back())
+                    .map(str::to_string)
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("download_{id}.bin"));
+
+        let _ = std::fs::create_dir_all(&self.settings.download_dir);
+        let save_path = self.settings.download_dir.join(&filename);
+        let paused = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        self.downloads.push(DownloadItem {
+            id,
+            url: url.to_string(),
+            filename,
+            save_path: save_path.clone(),
+            bytes_received: 0,
+            total_bytes: None,
+            status: DownloadStatus::InProgress,
+            paused: paused.clone(),
+            cancelled: cancelled.clone(),
+        });
+
+        let tx = self.download_tx.clone();
+        let net_engine = self.net_engine.clone();
+        let url_owned = url.to_string();
+        self.tokio_handle.spawn(async move {
+            let result = net_engine
+                .download_to_file(
+                    &url_owned,
+                    &save_path,
+                    &paused,
+                    &cancelled,
+                    |bytes_received, total_bytes| {
+                        let _ = tx.send(DownloadEvent::Progress {
+                            id,
+                            bytes_received,
+                            total_bytes,
+                        });
+                    },
+                )
+                .await;
+            let _ = tx.send(DownloadEvent::Finished { id, result });
+        });
+    }
+
+    pub fn poll_download_events(&mut self) {
+        while let Ok(ev) = self.download_rx.try_recv() {
+            self.dirty = true;
+            match ev {
+                DownloadEvent::Progress {
+                    id,
+                    bytes_received,
+                    total_bytes,
+                } => {
+                    if let Some(item) = self.downloads.iter_mut().find(|d| d.id == id) {
+                        item.bytes_received = bytes_received;
+                        if total_bytes.is_some() {
+                            item.total_bytes = total_bytes;
+                        }
+                    }
+                }
+                DownloadEvent::Finished { id, result } => {
+                    if let Some(item) = self.downloads.iter_mut().find(|d| d.id == id)
+                        && item.status != DownloadStatus::Cancelled
+                    {
+                        item.status = match result {
+                            Ok(()) => DownloadStatus::Completed,
+                            Err(e) => DownloadStatus::Failed(e),
+                        };
+                    }
+                }
+            }
         }
     }
 
@@ -547,6 +1038,18 @@ impl BrowserState {
         self.groups.iter().find(|g| g.id == id)
     }
 
+    /// Whether any main-window egui modal or overlay covers the viewport area.
+    ///
+    /// Native child WebViews paint above egui, so the active WebView must be
+    /// frozen into `page_snapshot` and hidden whenever one of these is open.
+    pub fn has_viewport_overlay(&self) -> bool {
+        self.tab_search_open
+            || self.omnibox_suggestions_open
+            || self.clear_data_modal_open
+            || self.task_manager_open
+            || self.group_rename.is_some()
+    }
+
     pub fn is_selected(&self, id: u64) -> bool {
         self.selected_tab_ids.contains(&id)
     }
@@ -558,6 +1061,9 @@ impl BrowserState {
     pub fn activate_tab(&mut self, id: u64) {
         if self.tab(id).is_none() {
             return;
+        }
+        if self.active_tab_id != Some(id) {
+            self.page_snapshot = None;
         }
         // Choosing a tab supersedes the tab-search overlay: the page must
         // come back even if the user picked a tab with the mouse.
@@ -1037,6 +1543,7 @@ impl BrowserState {
         self.next_tab_id += 1;
 
         let mut tab = Tab::new(tab_id, &resolved);
+        tab.set_zoom(self.settings.default_zoom);
         tab.loading = true;
         self.tabs.push(tab);
         self.activate_tab(tab_id);
@@ -1589,8 +2096,9 @@ impl BrowserState {
     }
 
     pub fn navigate_active_tab(&mut self, raw_input: String) {
+        let search_template = self.settings.search_template().to_string();
         if let Some(tab) = self.active_tab_mut() {
-            tab.navigate_to(raw_input);
+            tab.navigate_to_with_search(raw_input, &search_template);
             let tab_id = tab.id;
             let resolved_url = tab.url.clone();
             self.apply_navigation_for_tab(tab_id, resolved_url);
@@ -1635,6 +2143,21 @@ impl BrowserState {
     }
 
     fn load_into_webview_and_inspector(&mut self, tab_id: u64, url: String) {
+        if is_internal_ui_page(&url) {
+            if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                tab.error = None;
+                tab.loading = false;
+                tab.title = match url.as_str() {
+                    "oxide://history" => "History".to_string(),
+                    "oxide://downloads" => "Downloads".to_string(),
+                    "oxide://bookmarks" => "Bookmarks".to_string(),
+                    "oxide://settings" => "Settings".to_string(),
+                    _ => url.clone(),
+                };
+            }
+            return;
+        }
+
         let req_id = if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             tab.error = None;
             tab.request_id
@@ -1688,6 +2211,22 @@ impl BrowserState {
         }
     }
 
+    pub fn hard_reload_tab(&mut self, tab_id: u64) {
+        let net_engine = self.net_engine.clone();
+        self.tokio_handle.spawn(async move {
+            net_engine.clear_cache().await;
+        });
+        if let Some(tab) = self.tab_mut(tab_id) {
+            let url = tab.reload();
+            let req_id = tab.request_id;
+            self.log(ConsoleLevel::Net, format!("Hard reloading (cache bypassed): {url}"));
+            self.apply_navigation_for_tab(tab_id, url.clone());
+            if self.show_devtools {
+                self.spawn_fetch_with_bypass(tab_id, req_id, url, true);
+            }
+        }
+    }
+
     pub fn stop_active_tab(&mut self) {
         let stopped_url = if let Some(tab) = self.active_tab_mut() {
             tab.stop();
@@ -1712,9 +2251,13 @@ impl BrowserState {
             size: Size::Logical(LogicalSize::new(w, h)),
         };
 
-        let active_info = self
-            .active_tab()
-            .map(|t| (t.id, t.url.clone(), t.error.is_some()));
+        let active_info = self.active_tab().map(|t| {
+            (
+                t.id,
+                t.url.clone(),
+                t.error.is_some() || is_internal_ui_page(&t.url),
+            )
+        });
 
         if let Some((active_id, active_url, has_error)) = active_info.clone()
             && !has_error
@@ -1723,6 +2266,7 @@ impl BrowserState {
             let tx_nav = self.wv_event_tx.clone();
             let tx_title = self.wv_event_tx.clone();
             let tx_popup = self.wv_event_tx.clone();
+            let tx_dl = self.wv_event_tx.clone();
             let policy_nav = self.security_policy.clone();
             let policy_popup = self.security_policy.clone();
             let allow_html_flag = Arc::new(AtomicBool::new(active_url == "oxide://welcome"));
@@ -1801,15 +2345,40 @@ impl BrowserState {
                     false
                 })
                 .with_ipc_handler(move |request| {
-                    // The media probe posts `oxide-audio:1` / `oxide-audio:0`
-                    // when playback starts and stops.
                     let body = request.body();
                     if let Some(flag) = body.strip_prefix("oxide-audio:") {
                         let _ = tx_ipc.send(WebViewEvent::AudioState {
                             tab_id: active_id,
                             playing: flag == "1",
                         });
+                    } else if let Some(rest) = body.strip_prefix("oxide-find:") {
+                        let mut parts = rest.splitn(2, ':');
+                        if let (Some(a), Some(c)) = (parts.next(), parts.next())
+                            && let (Ok(active), Ok(count)) = (a.parse(), c.parse())
+                        {
+                            let _ = tx_ipc.send(WebViewEvent::FindResult {
+                                tab_id: active_id,
+                                active,
+                                count,
+                            });
+                        }
+                    } else if let Some(json_str) = body.strip_prefix("oxide-ctx:")
+                        && let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str)
+                    {
+                        let _ = tx_ipc.send(WebViewEvent::ContextMenu {
+                            tab_id: active_id,
+                            x: v.get("x").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32,
+                            y: v.get("y").and_then(|y| y.as_f64()).unwrap_or(0.0) as f32,
+                            link_url: v.get("link").and_then(|s| s.as_str()).map(str::to_string),
+                            img_url: v.get("img").and_then(|s| s.as_str()).map(str::to_string),
+                            selection: v.get("sel").and_then(|s| s.as_str()).map(str::to_string),
+                            is_editable: v.get("ed").and_then(|b| b.as_bool()).unwrap_or(false),
+                        });
                     }
+                })
+                .with_download_started_handler(move |url: String, _dest: &mut std::path::PathBuf| {
+                    let _ = tx_dl.send(WebViewEvent::DownloadRequested { url });
+                    false
                 });
 
             builder = if active_url == "oxide://welcome" {
@@ -1851,7 +2420,7 @@ impl BrowserState {
         // then hide the WebView. Context menus do *not* come through here:
         // they live in their own popup window above the page, so the page
         // stays visible and live while a menu is open.
-        let overlay_open = self.tab_search_open;
+        let overlay_open = self.has_viewport_overlay();
         let page_is_covered = active_has_error || overlay_open;
 
         // Capture the page on the first covered frame, while the WebView is
@@ -1889,6 +2458,15 @@ impl BrowserState {
             size: Size::Logical(LogicalSize::new(w, h)),
         };
 
+        let active_zoom = self.active_tab().map(|t| t.zoom);
+        if let (Some(active_id), Some(zoom)) = (active_id_opt, active_zoom)
+            && self.webview_zoom.get(&active_id).copied() != Some(zoom)
+            && let Some(wv) = self.webviews.get(&active_id)
+        {
+            let _ = wv.zoom(zoom);
+            self.webview_zoom.insert(active_id, zoom);
+        }
+
         for (&tab_id, wv) in &self.webviews {
             if Some(tab_id) == active_id_opt && !hide_page {
                 let _ = wv.set_bounds(bounds);
@@ -1908,6 +2486,9 @@ impl BrowserState {
     /// Discarding is safe because `ensure_and_sync_webviews` recreates any
     /// missing page the next time its tab becomes active.
     fn enforce_webview_budget(&mut self, active_id: Option<u64>) {
+        if !self.settings.memory_saver {
+            return;
+        }
         while self.webviews.len() > LIVE_WEBVIEW_LIMIT {
             let victim = self
                 .tabs
@@ -1945,9 +2526,14 @@ impl BrowserState {
         for ev in pending_events {
             match ev {
                 WebViewEvent::TitleChanged { tab_id, title } => {
+                    let mut recorded_url = None;
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-                        tab.title = title;
+                        tab.title = title.clone();
                         tab.loading = false;
+                        recorded_url = Some(tab.url.clone());
+                    }
+                    if let Some(url) = recorded_url {
+                        self.record_history(&url, &title);
                     }
                 }
                 WebViewEvent::UrlChanged { tab_id, url } => {
@@ -1955,13 +2541,22 @@ impl BrowserState {
                         self.webview_loaded_url.get(&tab_id) != Some(&url);
                     self.webview_loaded_url.insert(tab_id, url.clone());
 
+                    let preserve_draft = self.omnibox_focused && self.active_tab_id == Some(tab_id);
+                    let mut title_for_history = String::new();
                     let req_id_opt =
                         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                            let draft = preserve_draft.then(|| tab.omnibox_input.clone());
                             tab.sync_webview_url(url.clone());
+                            if let Some(d) = draft {
+                                tab.omnibox_input = d;
+                            }
+                            title_for_history = tab.title.clone();
                             Some(tab.request_id)
                         } else {
                             None
                         };
+
+                    self.record_history(&url, &title_for_history);
 
                     if self.show_devtools && should_fetch_inspector && let Some(req_id) = req_id_opt {
                         self.spawn_fetch(tab_id, req_id, url);
@@ -1972,8 +2567,13 @@ impl BrowserState {
                         ConsoleLevel::Warn,
                         format!("🛡 HTTPS-Only: Auto-upgraded navigation to {https_url}"),
                     );
+                    let preserve_draft = self.omnibox_focused && self.active_tab_id == Some(tab_id);
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                        let draft = preserve_draft.then(|| tab.omnibox_input.clone());
                         tab.sync_webview_url(https_url.clone());
+                        if let Some(d) = draft {
+                            tab.omnibox_input = d;
+                        }
                     }
                     self.load_into_webview_and_inspector(tab_id, https_url);
                 }
@@ -2002,16 +2602,58 @@ impl BrowserState {
                         tab.audio_playing = playing;
                     }
                 }
+                WebViewEvent::FindResult {
+                    tab_id,
+                    active,
+                    count,
+                } => {
+                    if self.active_tab_id == Some(tab_id) {
+                        self.find_match_index = active;
+                        self.find_match_count = count;
+                    }
+                }
+                WebViewEvent::ContextMenu {
+                    tab_id,
+                    x,
+                    y,
+                    link_url,
+                    img_url,
+                    selection,
+                    is_editable,
+                } => {
+                    if self.active_tab_id == Some(tab_id) {
+                        let pos = egui::pos2(
+                            self.viewport_rect.min.x + x,
+                            self.viewport_rect.min.y + y,
+                        );
+                        self.pending_menu = Some(PendingMenu {
+                            kind: MenuKind::Viewport {
+                                link_url,
+                                img_url,
+                                selection,
+                                is_editable,
+                            },
+                            pos,
+                        });
+                    }
+                }
+                WebViewEvent::DownloadRequested { url } => {
+                    self.start_download(&url);
+                }
             }
         }
     }
 
     fn spawn_fetch(&self, tab_id: u64, request_id: u64, url: String) {
+        self.spawn_fetch_with_bypass(tab_id, request_id, url, false);
+    }
+
+    fn spawn_fetch_with_bypass(&self, tab_id: u64, request_id: u64, url: String, bypass_cache: bool) {
         let net_engine = self.net_engine.clone();
         let tx = self.result_tx.clone();
 
         self.tokio_handle.spawn(async move {
-            let result = net_engine.fetch(&url).await;
+            let result = net_engine.fetch_with_options(&url, bypass_cache).await;
             let _ = tx.send(TabFetchResult {
                 tab_id,
                 request_id,
@@ -2040,7 +2682,13 @@ impl BrowserState {
                                 resp.duration_ms
                             ),
                         ));
+                        let preserve_draft =
+                            self.omnibox_focused && self.active_tab_id == Some(msg.tab_id);
+                        let draft = preserve_draft.then(|| tab.omnibox_input.clone());
                         tab.set_response(resp);
+                        if let Some(d) = draft {
+                            tab.omnibox_input = d;
+                        }
                     }
                     Err(err) => {
                         let err_str = err.to_string();
@@ -2330,5 +2978,43 @@ mod tests {
         let carried_id = target.tabs[0].group.expect("the group came along");
         let carried = target.group(carried_id).expect("the group itself came along");
         assert_eq!(carried.color, GroupColor::Blue);
+    }
+
+    #[test]
+    fn incognito_skips_history_and_clear_data_respects_range() {
+        let mut normal = state();
+        normal.record_history("https://example.com/", "Example");
+        assert_eq!(normal.history.len(), 1);
+        normal.clear_browsing_data(ClearRange::AllTime);
+        assert!(normal.history.is_empty());
+
+        let mut incog = BrowserState::new_incognito(handle());
+        assert!(incog.is_incognito);
+        incog.record_history("https://example.com/", "Example");
+        assert!(incog.history.is_empty());
+
+        normal.add_to_reading_list("Article", "https://example.com/post");
+        normal.add_to_reading_list("Article", "https://example.com/post");
+        assert_eq!(normal.reading_list.len(), 1);
+    }
+
+    #[test]
+    fn viewport_overlay_includes_modals_and_rename() {
+        let mut s = state();
+        assert!(!s.has_viewport_overlay());
+
+        s.clear_data_modal_open = true;
+        assert!(s.has_viewport_overlay());
+        s.clear_data_modal_open = false;
+
+        s.task_manager_open = true;
+        assert!(s.has_viewport_overlay());
+        s.task_manager_open = false;
+
+        s.group_rename = Some(GroupRename {
+            group_id: 1,
+            name: "Docs".to_string(),
+        });
+        assert!(s.has_viewport_overlay());
     }
 }
