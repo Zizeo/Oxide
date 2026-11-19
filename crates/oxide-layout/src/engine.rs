@@ -4,13 +4,15 @@ use crate::layout_tree::{LayoutBox, LayoutTree, Rect as LayoutRect};
 use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 use oxide_dom::{Document, NodeData, NodeId as DomNodeId};
 use oxide_style::{
-    AlignItems, ComputedStyle, Display, FlexDirection, JustifyContent, StyleTree,
+    AlignItems, ComputedStyle, Display, FlexDirection, JustifyContent, Overflow, Position,
+    StyleTree,
 };
+use taffy::Overflow as TaffyOverflow;
 use taffy::prelude::{
     AlignItems as TaffyAlignItems, AvailableSpace, Dimension, Display as TaffyDisplay,
     FlexDirection as TaffyFlexDirection, JustifyContent as TaffyJustifyContent,
-    LengthPercentage, LengthPercentageAuto, NodeId as TaffyNodeId, Rect as TaffyRect, Size, Style,
-    TaffyTree,
+    LengthPercentage, LengthPercentageAuto, NodeId as TaffyNodeId, Position as TaffyPosition,
+    Rect as TaffyRect, Size, Style, TaffyTree, TrackSizingFunction,
 };
 
 /// Internal context linking a Taffy node back to its DOM source.
@@ -191,11 +193,48 @@ fn measure_text(
     (width.max(1.0).min(max_w), height.max(font_size))
 }
 
+fn parse_track_list(tracks: &[String]) -> Vec<TrackSizingFunction> {
+    use taffy::prelude::{fr, length, auto};
+    tracks
+        .iter()
+        .map(|tok| {
+            let t = tok.trim();
+            if let Some(f) = t.strip_suffix("fr").and_then(|s| s.parse::<f32>().ok()) {
+                fr(f)
+            } else if let Some(px) = t.strip_suffix("px").and_then(|s| s.parse::<f32>().ok()) {
+                length(px)
+            } else {
+                auto()
+            }
+        })
+        .collect()
+}
+
 fn convert_computed_style(style: &ComputedStyle) -> Style {
     let display = match style.display {
         Display::None => TaffyDisplay::None,
         Display::Flex => TaffyDisplay::Flex,
+        Display::Grid => TaffyDisplay::Grid,
         Display::Block | Display::Inline => TaffyDisplay::Block,
+    };
+
+    let position = match style.position {
+        Position::Absolute | Position::Fixed => TaffyPosition::Absolute,
+        Position::Static | Position::Relative | Position::Sticky => TaffyPosition::Relative,
+    };
+
+    let inset = TaffyRect {
+        top: style.inset[0].map_or(LengthPercentageAuto::Auto, LengthPercentageAuto::Length),
+        right: style.inset[1].map_or(LengthPercentageAuto::Auto, LengthPercentageAuto::Length),
+        bottom: style.inset[2].map_or(LengthPercentageAuto::Auto, LengthPercentageAuto::Length),
+        left: style.inset[3].map_or(LengthPercentageAuto::Auto, LengthPercentageAuto::Length),
+    };
+
+    let overflow_val = match style.overflow {
+        Overflow::Visible => TaffyOverflow::Visible,
+        Overflow::Hidden => TaffyOverflow::Hidden,
+        Overflow::Scroll => TaffyOverflow::Scroll,
+        Overflow::Auto => TaffyOverflow::Scroll,
     };
 
     let flex_direction = match style.flex_direction {
@@ -261,6 +300,14 @@ fn convert_computed_style(style: &ComputedStyle) -> Style {
 
     Style {
         display,
+        position,
+        inset,
+        overflow: taffy::Point {
+            x: overflow_val,
+            y: overflow_val,
+        },
+        grid_template_columns: parse_track_list(&style.grid_template_columns),
+        grid_template_rows: parse_track_list(&style.grid_template_rows),
         flex_direction,
         justify_content,
         align_items,

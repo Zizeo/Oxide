@@ -121,6 +121,12 @@ fn is_private_or_loopback_host(host: &Host<&str>) -> bool {
 /// Resolves user input in the Omnibox into either a normalized URL or a Google Search URL.
 #[must_use]
 pub fn resolve_omnibox_input(input: &str) -> String {
+    resolve_omnibox_input_with_template(input, "https://www.google.com/search?q={query}")
+}
+
+/// Resolves user input in the Omnibox using a custom search URL template (`{query}`).
+#[must_use]
+pub fn resolve_omnibox_input_with_template(input: &str, search_template: &str) -> String {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return "oxide://welcome".to_string();
@@ -167,9 +173,14 @@ pub fn resolve_omnibox_input(input: &str) -> String {
         return u.to_string();
     }
 
-    // Otherwise, route to Google Search
+    // Otherwise, route to configured search engine template
     let encoded = percent_encoding::utf8_percent_encode(trimmed, percent_encoding::NON_ALPHANUMERIC);
-    format!("https://www.google.com/search?q={encoded}")
+    let template = if search_template.contains("{query}") {
+        search_template
+    } else {
+        "https://www.google.com/search?q={query}"
+    };
+    template.replace("{query}", &encoded.to_string())
 }
 
 /// Built-in HTML for `oxide://welcome` featuring a Google Search form and quick links.
@@ -180,131 +191,233 @@ pub fn welcome_page_html() -> &'static str {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>New Tab - Oxide Browser</title>
+    <title>New Tab</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: radial-gradient(circle at top, #1e293b 0%, #0f172a 70%);
-            color: #f8fafc;
+            font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+            background: #202124;
+            color: #e8eaed;
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 24px;
+            padding: 32px 24px 72px;
         }
         .container {
-            max-width: 720px;
+            max-width: 584px;
             width: 100%;
             text-align: center;
         }
-        .logo {
-            font-size: 48px;
-            font-weight: 800;
-            letter-spacing: -1px;
-            background: linear-gradient(135deg, #38bdf8, #818cf8);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 8px;
-        }
-        .subtitle {
-            color: #94a3b8;
-            font-size: 15px;
+        .brand {
+            font-size: 56px;
+            font-weight: 600;
+            letter-spacing: -0.03em;
+            color: #e8eaed;
             margin-bottom: 32px;
+            user-select: none;
         }
         .search-form {
             display: flex;
+            align-items: center;
             width: 100%;
-            background: #1e293b;
-            border: 1px solid #334155;
+            height: 46px;
+            background: #303134;
+            border: 1px solid #3c4043;
             border-radius: 9999px;
-            padding: 6px 8px 6px 20px;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
-            margin-bottom: 36px;
-            transition: border-color 0.2s;
+            padding: 0 18px;
+            margin-bottom: 32px;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .search-form:hover {
+            background: #35373b;
         }
         .search-form:focus-within {
-            border-color: #38bdf8;
+            background: #303134;
+            border-color: #669df6;
         }
         .search-input {
             flex: 1;
+            min-width: 0;
             background: transparent;
             border: none;
-            color: #f8fafc;
-            font-size: 16px;
+            color: #e8eaed;
+            font-size: 15px;
             outline: none;
         }
-        .search-btn {
-            background: #38bdf8;
-            color: #0f172a;
-            border: none;
-            border-radius: 9999px;
-            padding: 10px 24px;
-            font-weight: 600;
-            font-size: 14px;
-            cursor: pointer;
+        .search-input::placeholder {
+            color: #9aa0a6;
         }
-        .search-btn:hover {
-            background: #7dd3fc;
-        }
-        .grid {
+        .shortcuts {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-            gap: 14px;
-            margin-bottom: 32px;
-        }
-        .card {
-            background: rgba(30, 41, 59, 0.75);
-            border: 1px solid #334155;
-            border-radius: 12px;
-            padding: 16px 12px;
-            text-decoration: none;
-            color: #e2e8f0;
-            font-weight: 500;
-            font-size: 14px;
-            transition: transform 0.15s, border-color 0.15s;
-        }
-        .card:hover {
-            transform: translateY(-2px);
-            border-color: #38bdf8;
-            color: #38bdf8;
-        }
-        .shield-banner {
-            display: inline-flex;
-            align-items: center;
+            grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
             gap: 8px;
-            background: rgba(16, 185, 129, 0.1);
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            color: #34d399;
-            padding: 8px 16px;
-            border-radius: 9999px;
-            font-size: 13px;
+            justify-items: center;
+        }
+        .tile {
+            width: 88px;
+            padding: 12px 6px;
+            border-radius: 8px;
+            text-decoration: none;
+            color: #e8eaed;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            transition: background 0.12s ease;
+        }
+        .tile:hover {
+            background: #303134;
+        }
+        .tile-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: #303134;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: 600;
+            color: #e8eaed;
+        }
+        .tile:hover .tile-icon {
+            background: #3c4043;
+        }
+        .tile-label {
+            font-size: 12px;
+            color: #e8eaed;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 80px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="logo">⚡ Oxide Browser</div>
-        <p class="subtitle">Rust Chrome &amp; Security Engine • Powered by Wry WebView</p>
+        <h1 class="brand">Oxide</h1>
         <form class="search-form" action="https://www.google.com/search" method="GET">
-            <input class="search-input" type="text" name="q" placeholder="Search Google or type a query..." autofocus autocomplete="off">
-            <button class="search-btn" type="submit">Google Search</button>
+            <input class="search-input" type="text" name="q" placeholder="Search Google or type a URL" autofocus autocomplete="off">
         </form>
-        <div class="grid">
-            <a class="card" href="https://www.google.com">🔍 Google</a>
-            <a class="card" href="https://www.youtube.com">▶ YouTube</a>
-            <a class="card" href="https://www.rust-lang.org">🦀 Rust Lang</a>
-            <a class="card" href="https://news.ycombinator.com">📰 Hacker News</a>
-            <a class="card" href="https://github.com">🐙 GitHub</a>
-            <a class="card" href="https://en.wikipedia.org">📚 Wikipedia</a>
-        </div>
-        <div class="shield-banner">
-            🛡 Rust Security Guard Active: HTTPS-Only • SSRF &amp; Private LAN Protection • Popup Capture
+        <div class="shortcuts">
+            <a class="tile" href="https://www.google.com"><div class="tile-icon">G</div><span class="tile-label">Google</span></a>
+            <a class="tile" href="https://www.youtube.com"><div class="tile-icon">Y</div><span class="tile-label">YouTube</span></a>
+            <a class="tile" href="https://www.rust-lang.org"><div class="tile-icon">R</div><span class="tile-label">Rust Lang</span></a>
+            <a class="tile" href="https://news.ycombinator.com"><div class="tile-icon">H</div><span class="tile-label">Hacker News</span></a>
+            <a class="tile" href="https://github.com"><div class="tile-icon">GH</div><span class="tile-label">GitHub</span></a>
+            <a class="tile" href="https://en.wikipedia.org"><div class="tile-icon">W</div><span class="tile-label">Wikipedia</span></a>
         </div>
     </div>
 </body>
 </html>"#
+}
+
+/// Returns `true` when `a` and `b` share scheme, host, and effective port (SOP).
+#[must_use]
+pub fn is_same_origin(a: &Url, b: &Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// Validates a CORS response or preflight (`OPTIONS`) response against `request_origin` and `method`.
+pub fn validate_cors_response(
+    request_origin: &str,
+    response_headers: &std::collections::HashMap<String, String>,
+    method: &str,
+) -> Result<(), String> {
+    let Some(allow_origin) = response_headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("access-control-allow-origin"))
+        .map(|(_, v)| v.trim())
+    else {
+        return Err("Missing Access-Control-Allow-Origin header".to_string());
+    };
+
+    if allow_origin != "*" && !allow_origin.eq_ignore_ascii_case(request_origin) {
+        return Err(format!("Origin {request_origin} not allowed by CORS ({allow_origin})"));
+    }
+
+    if !matches!(method.to_ascii_uppercase().as_str(), "GET" | "HEAD" | "POST")
+        && let Some(allow_methods) = response_headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("access-control-allow-methods"))
+            .map(|(_, v)| v)
+    {
+        let upper = method.to_ascii_uppercase();
+        if !allow_methods
+            .split(',')
+            .any(|m| m.trim().eq_ignore_ascii_case(&upper))
+        {
+            return Err(format!("Method {upper} not in Access-Control-Allow-Methods"));
+        }
+    }
+
+    Ok(())
+}
+
+/// Parsed Content Security Policy (`default-src`, `script-src`, `style-src`, `img-src`, `connect-src`).
+#[derive(Debug, Clone, Default)]
+pub struct ContentSecurityPolicy {
+    directives: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl ContentSecurityPolicy {
+    #[must_use]
+    pub fn parse(header: &str) -> Self {
+        let mut directives = std::collections::HashMap::new();
+        for part in header.split(';') {
+            let mut tokens = part.split_whitespace();
+            let Some(name) = tokens.next() else {
+                continue;
+            };
+            let sources: Vec<String> = tokens.map(|s| s.to_ascii_lowercase()).collect();
+            directives.insert(name.to_ascii_lowercase(), sources);
+        }
+        Self { directives }
+    }
+
+    /// Returns `true` if `target_url` is permitted by `directive` (falling back to `default-src`).
+    #[must_use]
+    pub fn allows(&self, directive: &str, page_url: &Url, target_url: &Url) -> bool {
+        let Some(sources) = self
+            .directives
+            .get(&directive.to_ascii_lowercase())
+            .or_else(|| self.directives.get("default-src"))
+        else {
+            return true;
+        };
+
+        if sources.iter().any(|s| s == "'none'") {
+            return false;
+        }
+        for src in sources {
+            if src == "*" {
+                return true;
+            }
+            if src == "'self'" && is_same_origin(page_url, target_url) {
+                return true;
+            }
+            if let Some(scheme) = src.strip_suffix(':')
+                && target_url.scheme().eq_ignore_ascii_case(scheme)
+            {
+                return true;
+            }
+            if let Ok(parsed) = Url::parse(src)
+                && is_same_origin(&parsed, target_url)
+            {
+                return true;
+            }
+            if let Some(host) = target_url.host_str()
+                && src.eq_ignore_ascii_case(host)
+            {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[cfg(test)]
@@ -408,5 +521,27 @@ mod tests {
             policy.validate_webview_navigation("data:text/html,<script>evil()</script>", &allow_internal),
             NavigationDecision::Block(_)
         ));
+    }
+
+    #[test]
+    fn test_sop_cors_and_csp() {
+        let a = Url::parse("https://example.com/app").unwrap();
+        let b = Url::parse("https://example.com/api").unwrap();
+        let c = Url::parse("https://cdn.other.com/lib.js").unwrap();
+        assert!(is_same_origin(&a, &b));
+        assert!(!is_same_origin(&a, &c));
+
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("Access-Control-Allow-Origin".to_string(), "https://example.com".to_string());
+        headers.insert("Access-Control-Allow-Methods".to_string(), "GET, PUT".to_string());
+        assert!(validate_cors_response("https://example.com", &headers, "PUT").is_ok());
+        assert!(validate_cors_response("https://evil.com", &headers, "GET").is_err());
+        assert!(validate_cors_response("https://example.com", &headers, "DELETE").is_err());
+
+        let csp = ContentSecurityPolicy::parse("default-src 'self'; script-src 'self' https://cdn.other.com; img-src *");
+        assert!(csp.allows("script-src", &a, &b));
+        assert!(csp.allows("script-src", &a, &c));
+        assert!(!csp.allows("style-src", &a, &c));
+        assert!(csp.allows("img-src", &a, &c));
     }
 }

@@ -7,10 +7,14 @@ pub mod parser;
 
 pub use color::parse_color;
 pub use computed::{
-    AlignItems, ComputedStyle, Display, FlexDirection, JustifyContent, TextAlign,
+    AlignItems, BoxShadow, ComputedStyle, Display, FlexDirection, Gradient, JustifyContent,
+    Overflow, Position, TextAlign, Transform2D,
 };
 pub use engine::{default_ua_rules, resolve_styles, resolve_styles_with_rules, StyleTree};
-pub use parser::{apply_declarations, parse_declarations, parse_stylesheet, CssRule, Selector};
+pub use parser::{
+    apply_declarations, parse_declarations, parse_stylesheet, parse_stylesheet_for_viewport,
+    CssRule, Selector,
+};
 
 #[cfg(test)]
 mod tests {
@@ -78,5 +82,32 @@ mod tests {
         let style_elem = doc.find_elements_by_tag("style");
         assert_eq!(style_elem.len(), 1);
         assert_eq!(style_tree.get(style_elem[0]).unwrap().display, Display::None);
+    }
+
+    #[test]
+    fn test_combinators_specificity_vars_math_and_media() {
+        let html = r#"<html><head><style>
+            :is(body) { --accent: #ff0000; }
+            .box > p:nth-child(2) { width: calc(100px + 20px); color: var(--accent); opacity: 0.5 !important; }
+            #p2 { opacity: 0.9; }
+            .a + .b { z-index: 10; }
+            @media (min-width: 800px) { .b { height: clamp(10px, 50px, 100px); } }
+            @media (max-width: 400px) { .b { height: 999px; } }
+        </style></head><body>
+            <div class="box">
+                <p class="a">One</p>
+                <p id="p2" class="b">Two</p>
+            </div>
+        </body></html>"#;
+
+        let doc = Document::parse(html);
+        let tree = resolve_styles(&doc);
+        let p2 = doc.get_element_by_id("p2").unwrap();
+        let st = tree.get(p2).unwrap();
+        assert_eq!(st.width, Some(120.0));
+        assert_eq!(st.height, Some(50.0));
+        assert_eq!(st.z_index, 10);
+        assert_eq!(st.opacity, 0.5);
+        assert_eq!(st.color, [1.0, 0.0, 0.0, 1.0]);
     }
 }

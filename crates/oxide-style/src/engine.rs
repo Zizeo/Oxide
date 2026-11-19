@@ -1,7 +1,10 @@
 //! Style computation engine applying UA styles, author rules, and inline styles with inheritance.
 
 use crate::computed::{ComputedStyle, Display};
-use crate::parser::{apply_declarations, parse_declarations, parse_stylesheet, CssRule, Selector};
+use crate::parser::{
+    apply_declarations, apply_declarations_filtered, parse_declarations, parse_stylesheet,
+    Combinator, ComplexSelector, CssRule, PseudoClass, Selector, SimpleSelector,
+};
 use oxide_dom::{Document, NodeData, NodeId};
 use std::collections::HashMap;
 
@@ -68,13 +71,14 @@ fn resolve_node_styles(
 
     let mut style = ComputedStyle::default();
 
-    // Inherit text & typography properties from parent if available
+    // Inherit text & typography properties and CSS custom properties from parent
     if let Some(parent) = parent_style {
         style.color = parent.color;
         style.font_size = parent.font_size;
         style.font_weight = parent.font_weight;
         style.text_align = parent.text_align;
         style.line_height = parent.line_height;
+        style.custom_props = parent.custom_props.clone();
     }
 
     match &node.data {
@@ -96,22 +100,35 @@ fn resolve_node_styles(
 
             // A. Apply matching UA rules
             for rule in ua_rules {
-                if matches_selector(&rule.selector, &tag_lower, attributes) {
+                if matches_selector_in_doc(doc, node_id, &rule.selector, &tag_lower, attributes) {
                     apply_declarations(&mut style, &rule.declarations);
                 }
             }
 
-            // B. Apply matching Author rules (<style> blocks)
-            for rule in author_rules {
-                if matches_selector(&rule.selector, &tag_lower, attributes) {
-                    apply_declarations(&mut style, &rule.declarations);
-                }
+            // B. Collect matching Author rules and sort by (specificity, source_order)
+            let mut matched: Vec<((u16, u16, u16), usize, &CssRule)> = author_rules
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    matches_selector_in_doc(doc, node_id, &r.selector, &tag_lower, attributes)
+                })
+                .map(|(idx, r)| (r.selector.specificity(), idx, r))
+                .collect();
+            matched.sort_by_key(|(spec, idx, _)| (*spec, *idx));
+
+            for (_, _, rule) in &matched {
+                apply_declarations_filtered(&mut style, &rule.declarations, Some(false));
             }
 
-            // C. Apply inline style="..." attribute (highest priority)
-            if let Some(inline_style_str) = attributes.get("style") {
-                let inline_decls = parse_declarations(inline_style_str);
-                apply_declarations(&mut style, &inline_decls);
+            let inline_decls = attributes.get("style").map(|s| parse_declarations(s));
+            if let Some(decls) = &inline_decls {
+                apply_declarations_filtered(&mut style, decls, Some(false));
+            }
+            for (_, _, rule) in &matched {
+                apply_declarations_filtered(&mut style, &rule.declarations, Some(true));
+            }
+            if let Some(decls) = &inline_decls {
+                apply_declarations_filtered(&mut style, decls, Some(true));
             }
         }
     }
@@ -130,6 +147,151 @@ fn resolve_node_styles(
             tree,
         );
     }
+}
+
+fn matches_selector_in_doc(
+    doc: &Document,
+    node_id: NodeId,
+    selector: &Selector,
+    tag_name: &str,
+    attributes: &HashMap<String, String>,
+) -> bool {
+    match selector {
+        Selector::Complex(c) => matches_complex(doc, node_id, c),
+        other => matches_selector(other, tag_name, attributes),
+    }
+}
+
+fn matches_complex(doc: &Document, node_id: NodeId, complex: &ComplexSelector) -> bool {
+    let Some((last, _)) = complex.parts.last() else {
+        return false;
+    };
+    if !matches_simple(doc, node_id, last) {
+        return false;
+    }
+    matches_complex_prefix(doc, node_id, &complex.parts[..complex.parts.len() - 1])
+}
+
+fn matches_complex_prefix(
+    doc: &Document,
+    right_id: NodeId,
+    prefix: &[(SimpleSelector, Option<Combinator>)],
+) -> bool {
+    let Some((sel, comb_opt)) = prefix.last() else {
+        return true;
+    };
+    let rest = &prefix[..prefix.len() - 1];
+    let comb = comb_opt.unwrap_or(Combinator::Descendant);
+
+    match comb {
+        Combinator::Child => {
+            let Some(parent_id) = doc.get(right_id).and_then(|n| n.parent) else {
+                return false;
+            };
+            matches_simple(doc, parent_id, sel) && matches_complex_prefix(doc, parent_id, rest)
+        }
+        Combinator::Descendant => {
+            let mut cur = doc.get(right_id).and_then(|n| n.parent);
+            while let Some(anc_id) = cur {
+                if matches_simple(doc, anc_id, sel) && matches_complex_prefix(doc, anc_id, rest) {
+                    return true;
+                }
+                cur = doc.get(anc_id).and_then(|n| n.parent);
+            }
+            false
+        }
+        Combinator::AdjacentSibling => {
+            let Some(prev_id) = prev_element_sibling(doc, right_id) else {
+                return false;
+            };
+            matches_simple(doc, prev_id, sel) && matches_complex_prefix(doc, prev_id, rest)
+        }
+        Combinator::GeneralSibling => {
+            let mut cur = prev_element_sibling(doc, right_id);
+            while let Some(sib_id) = cur {
+                if matches_simple(doc, sib_id, sel) && matches_complex_prefix(doc, sib_id, rest) {
+                    return true;
+                }
+                cur = prev_element_sibling(doc, sib_id);
+            }
+            false
+        }
+    }
+}
+
+fn prev_element_sibling(doc: &Document, node_id: NodeId) -> Option<NodeId> {
+    let parent_id = doc.get(node_id)?.parent?;
+    let children = &doc.get(parent_id)?.children;
+    let pos = children.iter().position(|&id| id == node_id)?;
+    children[..pos]
+        .iter()
+        .rev()
+        .copied()
+        .find(|&id| matches!(doc.get(id).map(|n| &n.data), Some(NodeData::Element { .. })))
+}
+
+fn element_index_in_parent(doc: &Document, node_id: NodeId) -> Option<usize> {
+    let parent_id = doc.get(node_id)?.parent?;
+    let children = &doc.get(parent_id)?.children;
+    let mut idx = 0usize;
+    for &cid in children {
+        if matches!(doc.get(cid).map(|n| &n.data), Some(NodeData::Element { .. })) {
+            idx += 1;
+            if cid == node_id {
+                return Some(idx);
+            }
+        }
+    }
+    None
+}
+
+fn matches_simple(doc: &Document, node_id: NodeId, sel: &SimpleSelector) -> bool {
+    let Some(NodeData::Element {
+        tag_name,
+        attributes,
+    }) = doc.get(node_id).map(|n| &n.data)
+    else {
+        return false;
+    };
+    if let Some(t) = &sel.tag
+        && !t.eq_ignore_ascii_case(tag_name)
+    {
+        return false;
+    }
+    if let Some(id_val) = &sel.id
+        && attributes.get("id").map(String::as_str) != Some(id_val.as_str())
+    {
+        return false;
+    }
+    for c in &sel.classes {
+        let has = attributes
+            .get("class")
+            .is_some_and(|attr| attr.split_whitespace().any(|tok| tok.eq_ignore_ascii_case(c)));
+        if !has {
+            return false;
+        }
+    }
+    for p in &sel.pseudos {
+        match p {
+            PseudoClass::NthChild(n) => {
+                if element_index_in_parent(doc, node_id) != Some(*n) {
+                    return false;
+                }
+            }
+            PseudoClass::Not(inner) => {
+                if matches_simple(doc, node_id, inner) {
+                    return false;
+                }
+            }
+            PseudoClass::Is(list) => {
+                if !list.iter().any(|s| matches_simple(doc, node_id, s)) {
+                    return false;
+                }
+            }
+            PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus => {}
+        }
+    }
+    true
 }
 
 fn matches_selector(
@@ -185,6 +347,7 @@ fn matches_selector(
             }
             true
         }
+        Selector::Complex(_) => false,
     }
 }
 

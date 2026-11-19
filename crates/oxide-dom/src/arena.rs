@@ -6,6 +6,11 @@ new_key_type! {
     pub struct NodeId;
 }
 
+#[must_use]
+pub fn node_key_id(id: NodeId) -> u64 {
+    slotmap::Key::data(&id).as_ffi()
+}
+
 /// The type and content of a DOM node.
 #[derive(Debug, Clone)]
 pub enum NodeData {
@@ -77,6 +82,7 @@ impl Node {
 pub struct Document {
     pub(crate) nodes: SlotMap<NodeId, Node>,
     pub root: Option<NodeId>,
+    pub focused_node: Option<NodeId>,
 }
 
 impl Document {
@@ -114,6 +120,165 @@ impl Document {
         self.nodes.get(id)
     }
 
+    #[must_use]
+    pub fn find_node_by_key_id(&self, raw: u64) -> Option<NodeId> {
+        self.nodes.keys().find(|&id| node_key_id(id) == raw)
+    }
+
+    /// Returns all focusable HTML form controls in document order.
+    #[must_use]
+    pub fn focusable_controls(&self) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        if let Some(root) = self.root {
+            self.collect_focusable(root, &mut out);
+        }
+        out
+    }
+
+    fn collect_focusable(&self, id: NodeId, out: &mut Vec<NodeId>) {
+        let Some(node) = self.nodes.get(id) else {
+            return;
+        };
+        if let NodeData::Element {
+            tag_name,
+            attributes,
+        } = &node.data
+        {
+            let tag = tag_name.to_ascii_lowercase();
+            let disabled = attributes.contains_key("disabled");
+            if !disabled
+                && matches!(tag.as_str(), "input" | "textarea" | "select" | "button")
+                && attributes.get("type").map(|t| t.to_ascii_lowercase()).as_deref() != Some("hidden")
+            {
+                out.push(id);
+            }
+        }
+        for &child in &node.children {
+            self.collect_focusable(child, out);
+        }
+    }
+
+    /// Advances focus (`Tab` / `Shift+Tab`) across form controls.
+    pub fn focus_next(&mut self, backwards: bool) -> Option<NodeId> {
+        let list = self.focusable_controls();
+        if list.is_empty() {
+            self.focused_node = None;
+            return None;
+        }
+        let next = match self.focused_node.and_then(|f| list.iter().position(|&id| id == f)) {
+            None => {
+                if backwards {
+                    list[list.len() - 1]
+                } else {
+                    list[0]
+                }
+            }
+            Some(idx) => {
+                if backwards {
+                    if idx == 0 { list[list.len() - 1] } else { list[idx - 1] }
+                } else {
+                    list[(idx + 1) % list.len()]
+                }
+            }
+        };
+        self.focused_node = Some(next);
+        Some(next)
+    }
+
+    /// Appends a character to the focused `<input>` or `<textarea>` `value`.
+    pub fn type_char(&mut self, ch: char) {
+        let Some(id) = self.focused_node else {
+            return;
+        };
+        if let Some(NodeData::Element {
+            tag_name,
+            attributes,
+        }) = self.nodes.get_mut(id).map(|n| &mut n.data)
+            && matches!(tag_name.to_ascii_lowercase().as_str(), "input" | "textarea")
+        {
+            let entry = attributes.entry("value".to_string()).or_default();
+            entry.push(ch);
+        }
+    }
+
+    /// Removes the last character from the focused `<input>` or `<textarea>` `value`.
+    pub fn backspace(&mut self) {
+        let Some(id) = self.focused_node else {
+            return;
+        };
+        if let Some(NodeData::Element {
+            tag_name,
+            attributes,
+        }) = self.nodes.get_mut(id).map(|n| &mut n.data)
+            && matches!(tag_name.to_ascii_lowercase().as_str(), "input" | "textarea")
+            && let Some(val) = attributes.get_mut("value")
+        {
+            val.pop();
+        }
+    }
+
+    /// Toggles a checkbox or selects a radio button (clearing same-name siblings).
+    pub fn toggle_control(&mut self, node_id: NodeId) {
+        let Some(NodeData::Element {
+            tag_name,
+            attributes,
+        }) = self.nodes.get(node_id).map(|n| &n.data)
+        else {
+            return;
+        };
+        if !tag_name.eq_ignore_ascii_case("input") {
+            return;
+        }
+        let kind = attributes
+            .get("type")
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+        if kind == "checkbox" {
+            if let Some(NodeData::Element { attributes, .. }) =
+                self.nodes.get_mut(node_id).map(|n| &mut n.data)
+            {
+                if attributes.contains_key("checked") {
+                    attributes.remove("checked");
+                } else {
+                    attributes.insert("checked".to_string(), "true".to_string());
+                }
+            }
+        } else if kind == "radio" {
+            let group_name = attributes.get("name").cloned();
+            if let Some(name) = group_name {
+                let ids: Vec<NodeId> = self.nodes.keys().collect();
+                for id in ids {
+                    if let Some(NodeData::Element {
+                        tag_name,
+                        attributes,
+                    }) = self.nodes.get_mut(id).map(|n| &mut n.data)
+                        && tag_name.eq_ignore_ascii_case("input")
+                        && attributes.get("type").is_some_and(|t| t.eq_ignore_ascii_case("radio"))
+                        && attributes.get("name") == Some(&name)
+                    {
+                        attributes.remove("checked");
+                    }
+                }
+            }
+            if let Some(NodeData::Element { attributes, .. }) =
+                self.nodes.get_mut(node_id).map(|n| &mut n.data)
+            {
+                attributes.insert("checked".to_string(), "true".to_string());
+            }
+        }
+    }
+
+    pub fn select_option(&mut self, node_id: NodeId, value: &str) {
+        if let Some(NodeData::Element {
+            tag_name,
+            attributes,
+        }) = self.nodes.get_mut(node_id).map(|n| &mut n.data)
+            && tag_name.eq_ignore_ascii_case("select")
+        {
+            attributes.insert("value".to_string(), value.to_string());
+        }
+    }
+
     pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
         self.nodes.get_mut(id)
     }
@@ -135,6 +300,109 @@ impl Document {
         {
             attributes.insert(name.into(), value.into());
         }
+    }
+
+    pub fn remove_attribute(&mut self, id: NodeId, name: &str) {
+        if let Some(node) = self.nodes.get_mut(id)
+            && let NodeData::Element { attributes, .. } = &mut node.data
+        {
+            attributes.remove(name);
+        }
+    }
+
+    pub fn create_element(&mut self, tag_name: &str) -> NodeId {
+        self.insert_node(
+            None,
+            NodeData::Element {
+                tag_name: tag_name.to_ascii_lowercase(),
+                attributes: HashMap::new(),
+            },
+        )
+    }
+
+    pub fn create_text_node(&mut self, content: &str) -> NodeId {
+        self.insert_node(
+            None,
+            NodeData::Text {
+                content: content.to_string(),
+            },
+        )
+    }
+
+    pub fn remove_child(&mut self, parent_id: NodeId, child_id: NodeId) -> bool {
+        let removed = if let Some(parent) = self.nodes.get_mut(parent_id) {
+            let before = parent.children.len();
+            parent.children.retain(|&c| c != child_id);
+            parent.children.len() < before
+        } else {
+            false
+        };
+        if removed && let Some(child) = self.nodes.get_mut(child_id) {
+            child.parent = None;
+        }
+        removed
+    }
+
+    pub fn insert_before(
+        &mut self,
+        parent_id: NodeId,
+        new_child: NodeId,
+        ref_child: Option<NodeId>,
+    ) {
+        if let Some(old_parent) = self.nodes.get(new_child).and_then(|n| n.parent) {
+            self.remove_child(old_parent, new_child);
+        }
+        if let Some(parent) = self.nodes.get_mut(parent_id) {
+            let pos = ref_child
+                .and_then(|r| parent.children.iter().position(|&c| c == r))
+                .unwrap_or(parent.children.len());
+            parent.children.insert(pos, new_child);
+        }
+        if let Some(child) = self.nodes.get_mut(new_child) {
+            child.parent = Some(parent_id);
+        }
+    }
+
+    pub fn replace_child(
+        &mut self,
+        parent_id: NodeId,
+        new_child: NodeId,
+        old_child: NodeId,
+    ) -> bool {
+        if let Some(old_parent) = self.nodes.get(new_child).and_then(|n| n.parent) {
+            self.remove_child(old_parent, new_child);
+        }
+        let replaced = if let Some(parent) = self.nodes.get_mut(parent_id)
+            && let Some(pos) = parent.children.iter().position(|&c| c == old_child)
+        {
+            parent.children[pos] = new_child;
+            true
+        } else {
+            false
+        };
+        if replaced {
+            if let Some(old) = self.nodes.get_mut(old_child) {
+                old.parent = None;
+            }
+            if let Some(new_n) = self.nodes.get_mut(new_child) {
+                new_n.parent = Some(parent_id);
+            }
+        }
+        replaced
+    }
+
+    pub fn clone_node(&mut self, node_id: NodeId, deep: bool) -> Option<NodeId> {
+        let data = self.nodes.get(node_id)?.data.clone();
+        let children = self.nodes.get(node_id)?.children.clone();
+        let cloned_id = self.insert_node(None, data);
+        if deep {
+            for cid in children {
+                if let Some(child_clone) = self.clone_node(cid, true) {
+                    self.append_child(cloned_id, child_clone);
+                }
+            }
+        }
+        Some(cloned_id)
     }
 
     /// Sets text content on a node, replacing any existing child nodes with a single text node.
@@ -320,6 +588,18 @@ impl Document {
             self.find_elements_by_class(class_name).first().copied()
         } else {
             self.find_elements_by_tag(s).first().copied()
+        }
+    }
+
+    #[must_use]
+    pub fn query_selector_all(&self, selector: &str) -> Vec<NodeId> {
+        let s = selector.trim();
+        if let Some(id_name) = s.strip_prefix('#') {
+            self.get_element_by_id(id_name).into_iter().collect()
+        } else if let Some(class_name) = s.strip_prefix('.') {
+            self.find_elements_by_class(class_name)
+        } else {
+            self.find_elements_by_tag(s)
         }
     }
 }

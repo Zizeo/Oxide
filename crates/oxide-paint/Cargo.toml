@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 oxide-dom = { path = "../oxide-dom" }
 oxide-layout = { path = "../oxide-layout" }
+oxide-style = { path = "../oxide-style" }
 vello = { workspace = true }
 cosmic-text = { workspace = true }
 thiserror = { workspace = true }
